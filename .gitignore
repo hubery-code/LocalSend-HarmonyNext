@@ -1,0 +1,25 @@
+# HarmonyOS / build outputs
+build/
+**/build/
+.hvigor/
+oh_modules/
+**/.cxx/
+*.har
+*.hap
+*.hsp
+*.app
+BuildProfile.ets
+**/BuildProfile.ets
+
+# Signing material and secrets — never commit
+*.p12
+*.cer
+*.csr
+*.p7b
+local.signing.json5
+local.properties
+
+# Tooling noise
+.DS_Store
+.idea/
+*.log
