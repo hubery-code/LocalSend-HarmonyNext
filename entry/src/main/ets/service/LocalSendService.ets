@@ -2,10 +2,11 @@ import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 import {
-  ApiPath, DEFAULT_PORT, DestinationContext, DeviceTypeValue, Discovery, FileProgressEvent, FileStatus,
-  HttpServer, Identity, IdentityRepository, KnownChannel, PrepareContext, PrepareDecision, PROTOCOL_VERSION,
-  Peer, ProtocolScheme, ReceivedFile, ReceiveSession, RequestHandler, SessionEndReason, SessionManager,
-  SessionManagerConfig, TlsMaterial, WireDeviceInfo
+  ApiPath, ClientCredentials, DEFAULT_PORT, DestinationContext, DeviceTypeValue, Discovery,
+  FileProgressEvent, FileStatus, HttpServer, Identity, IdentityRepository, KnownChannel, PrepareContext,
+  PrepareDecision, PROTOCOL_VERSION, Peer, ProtocolScheme, ReceivedFile, ReceiveSession, RequestHandler,
+  SendFile, SendFileStatus, SendSource, SendTarget, SendTask, SendTaskStatus, Sender, SenderConfig,
+  SessionEndReason, SessionManager, SessionManagerConfig, TlsMaterial, WireDeviceInfo
 } from '@lsnext/protocol';
 import { AppPrefs } from './AppPrefs';
 import { formatHostSpec, parseHostSpec, sameHost } from './HostSpec';
@@ -19,6 +20,7 @@ export class PeerRow {
   port: number = 0;
   scheme: string = 'http';
   download: boolean = false;
+  fingerprint: string = '';
 }
 
 export class FileRow {
@@ -26,6 +28,7 @@ export class FileRow {
   id: string = '';
   name: string = '';
   size: number = 0;
+  /** Bytes received while downloading; bytes handed to the socket while sending. */
   received: number = 0;
   status: string = '';
 }
@@ -47,6 +50,15 @@ export class ServiceSnapshot {
   sessionSender: string = '';
   sessionFiles: FileRow[] = [];
   hosts: string[] = [];
+  /** Files the user has picked to send, not sent yet. */
+  picked: FileRow[] = [];
+  sendActive: boolean = false;
+  sendPeer: string = '';
+  sendState: string = '';
+  sendFiles: FileRow[] = [];
+  sendTotal: number = 0;
+  sendSent: number = 0;
+  sendError: string = '';
   log: string[] = [];
 }
 
@@ -77,6 +89,8 @@ export class LocalSendService {
   private aliasText: string = '';
   private encryption: boolean = false;
   private known: KnownChannel[] = [];
+  private sender: Sender | null = null;
+  private pickedUris: string[] = [];
 
   /** Called by the page in aboutToAppear; the service never holds a UI object. */
   attach(listener: (snapshot: ServiceSnapshot) => void): void {
@@ -292,6 +306,134 @@ export class LocalSendService {
     return this.discovery === null ? [] : this.discovery.peers.list();
   }
 
+  // ------------------------------------------------------------------- sending
+
+  /**
+   * Stages the uris the system picker returned — a document uri, a media uri or a sandbox path, all
+   * of which `fileIo.open` accepts unchanged.
+   *
+   * Picks accumulate because the phone's document picker returns one file per invocation: a folder
+   * transfer is built by tapping 选择文档 several times, so a second pick must not discard the first.
+   */
+  addPicked(uris: string[]): void {
+    for (let i = 0; i < uris.length; i++) {
+      const uri: string = uris[i];
+      if (this.pickedUris.indexOf(uri) < 0) {
+        this.pickedUris.push(uri);
+      }
+    }
+    this.emit();
+  }
+
+  clearPicked(): void {
+    this.pickedUris = [];
+    this.emit();
+  }
+
+  /**
+   * Sends the staged selection to one peer. The engine runs on its own and reports through
+   * `onChanged`, so a folder transfer never blocks the tap handler that started it.
+   */
+  startSend(fingerprint: string, pin: string): void {
+    const peer: Peer | null = this.discovery === null ? null : this.discovery.peers.get(fingerprint);
+    if (peer === null) {
+      this.reportError('该设备已不在列表中，请重新发现');
+      return;
+    }
+    if (this.pickedUris.length === 0) {
+      this.reportError('还没有选择文件');
+      return;
+    }
+    const identity: Identity | null = this.identity;
+    if (identity === null) {
+      this.reportError('设备标识尚未就绪');
+      return;
+    }
+    const sources: SendSource[] = [];
+    for (let i = 0; i < this.pickedUris.length; i++) {
+      sources.push({ uri: this.pickedUris[i], fileName: displayNameOf(this.pickedUris[i]) });
+    }
+    const target: SendTarget = {
+      host: peer.host,
+      port: peer.port,
+      scheme: peer.protocol,
+      alias: peer.alias,
+      fingerprint: peer.fingerprint
+    };
+    const sender: Sender = this.sender === null ? new Sender(this.senderConfig(identity)) : this.sender;
+    this.sender = sender;
+    sender.start(target, sources, pin.length > 0 ? pin : null);
+    this.emit();
+  }
+
+  cancelSend(): void {
+    if (this.sender !== null) {
+      this.sender.cancel();
+    }
+    this.emit();
+  }
+
+  private senderConfig(identity: Identity): SenderConfig {
+    const credentials: ClientCredentials | null = identity.isHttps
+      ? { certPem: identity.certPem, keyPem: identity.keyPem, keyPassword: identity.keyPassword }
+      : null;
+    const config: SenderConfig = {
+      self: (): WireDeviceInfo => this.selfInfo(identity),
+      credentials: (): ClientCredentials | null => credentials,
+      onChanged: (): void => this.emit(),
+      log: (message: string): void => this.log(message)
+    };
+    return config;
+  }
+
+  private sendRows(): FileRow[] {
+    const task: SendTask | null = this.sender === null ? null : this.sender.current();
+    const rows: FileRow[] = [];
+    if (task === null) {
+      return rows;
+    }
+    for (let i = 0; i < task.files.length; i++) {
+      const file: SendFile = task.files[i];
+      const row: FileRow = new FileRow();
+      row.id = file.fileId;
+      row.name = file.fileName;
+      row.size = file.size;
+      row.received = file.sent;
+      row.status = file.status;
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  private pickedRows(): FileRow[] {
+    const rows: FileRow[] = [];
+    for (let i = 0; i < this.pickedUris.length; i++) {
+      const row: FileRow = new FileRow();
+      row.id = `p${i}`;
+      row.name = displayNameOf(this.pickedUris[i]);
+      row.status = 'queued';
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  private sendErrorText(): string {
+    const task: SendTask | null = this.sender === null ? null : this.sender.current();
+    if (task === null) {
+      return '';
+    }
+    if (task.error.length > 0) {
+      return task.error;
+    }
+    // The task-level error stays empty when a single file failed; surface that one instead.
+    for (let i = 0; i < task.files.length; i++) {
+      if (task.files[i].status === SendFileStatus.FAILED) {
+        return `${task.files[i].fileName}: ${task.files[i].error}`;
+      }
+    }
+    return '';
+  }
+
   // ------------------------------------------------------------- user answers
 
   acceptOffer(fileIds: string[]): void {
@@ -456,6 +598,7 @@ export class LocalSendService {
       row.port = peers[i].port;
       row.scheme = peers[i].protocol;
       row.download = peers[i].download;
+      row.fingerprint = peers[i].fingerprint;
       rows.push(row);
     }
     return rows;
@@ -488,7 +631,34 @@ export class LocalSendService {
       specs.push(formatHostSpec(this.known[i]));
     }
     snapshot.hosts = specs;
+    const sendTask: SendTask | null = this.sender === null ? null : this.sender.current();
+    snapshot.picked = this.pickedRows();
+    snapshot.sendActive = sendTask !== null && !sendTask.isFinished();
+    snapshot.sendPeer = sendTask === null ? '' : `${sendTask.peerAlias} (${sendTask.target.host})`;
+    snapshot.sendState = sendTask === null ? '' : sendTask.status;
+    snapshot.sendFiles = this.sendRows();
+    snapshot.sendTotal = sendTask === null ? 0 : sendTask.totalBytes();
+    snapshot.sendSent = sendTask === null ? 0 : sendTask.sentBytes();
+    snapshot.sendError = this.sendErrorText();
     snapshot.log = this.logLines.slice(0);
     listener(snapshot);
+  }
+}
+
+/**
+ * Last path segment of a uri, percent-decoded.
+ *
+ * Pickers hand back `file://docs/.../名字.pdf` and `file://media/Photo/.../IMG_1.jpg`; a
+ * `decodeURIComponent` failure only means the name contains a stray `%`, which is legal in a file
+ * name, so the raw tail is the better answer.
+ */
+function displayNameOf(uri: string): string {
+  const trimmed: string = uri.endsWith('/') ? uri.substring(0, uri.length - 1) : uri;
+  const slash: number = trimmed.lastIndexOf('/');
+  const tail: string = slash < 0 ? trimmed : trimmed.substring(slash + 1);
+  try {
+    return decodeURIComponent(tail);
+  } catch (e) {
+    return tail;
   }
 }

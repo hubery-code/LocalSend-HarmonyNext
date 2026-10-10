@@ -3,6 +3,7 @@ import { ByteLink, PeerAddress, formatAuthority } from '../transport/ByteLink';
 import { connectTcp, connectTls, ClientCredentials } from '../transport/DialedLinks';
 import { ProtocolScheme } from '../wire/Constants';
 import { HttpResponseHead, Status, framingOf, parseResponseHead, setHeader } from './Http';
+import { describeFailure } from '../util/Errors';
 import { BodyDecoder, ByteQueue, bytesToAscii } from './Framing';
 
 const decoder: util.TextDecoder = util.TextDecoder.create('utf-8');
@@ -274,6 +275,7 @@ export class HttpClient {
     const link: ByteLink = await dial(spec.target, spec.credentials ?? null, timeout);
     let cancelledByPeer: boolean = false;
     let peerReplied: boolean = false;
+    let written: number = 0;
     try {
       const headers: Map<string, string> = new Map<string, string>();
       headers.set('host', formatAuthority(toPeer(spec.target)));
@@ -286,6 +288,10 @@ export class HttpClient {
         new SendProgress(body.length, (): boolean => isCancelled() || cancelledByPeer || peerReplied),
         async (bytes: Uint8Array): Promise<void> => {
           await link.send(bytes);
+          // Progress is reported here rather than by the producer: this is the point where bytes
+          // actually leave, so a producer that buffers cannot report a transfer ahead of itself.
+          written += bytes.length;
+          onSent(written, body.length);
         }
       );
 
@@ -306,7 +312,7 @@ export class HttpClient {
         cancelledByPeer = true;
       }
       await producer.catch((reason: Object) => {
-        (spec.log ?? ((message: string): void => undefined))(`upload producer stopped: ${reason}`);
+        (spec.log ?? ((message: string): void => undefined))(`upload producer stopped: ${describeFailure(reason)}`);
       });
       const raw: Uint8Array = await reader.readWholeBody(256 * 1024);
       const response: UploadResult = {

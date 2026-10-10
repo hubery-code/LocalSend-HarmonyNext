@@ -1,8 +1,14 @@
 import { common } from '@kit.AbilityKit';
+import { picker } from '@kit.CoreFileKit';
+import { BusinessError } from '@kit.BasicServicesKit';
+import { describeFailure } from '@lsnext/protocol';
 import { FileRow, LocalSendService, PeerRow, ServiceSnapshot } from '../service/LocalSendService';
 
 /** One controller for the whole app: the page is rebuilt on rotation and must not restart it. */
 const service: LocalSendService = new LocalSendService();
+
+/** How many files one send may carry; the picker dialogs enforce the same ceiling. */
+const MAX_PICK: number = 20;
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) {
@@ -17,12 +23,51 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
+function sendStatusLabel(status: string): string {
+  if (status === 'hashing') {
+    return '计算校验';
+  }
+  if (status === 'sending') {
+    return '上传中';
+  }
+  if (status === 'success') {
+    return '完成';
+  }
+  if (status === 'skipped') {
+    return '对方未选';
+  }
+  if (status === 'failed') {
+    return '失败';
+  }
+  if (status === 'canceled') {
+    return '已取消';
+  }
+  if (status === 'pending') {
+    return '排队';
+  }
+  return '准备中';
+}
+
+/** Task-level states share the row vocabulary; only the waiting and uploading phases differ. */
+function taskStatusLabel(status: string): string {
+  if (status === 'waiting') {
+    return '等待对方确认';
+  }
+  if (status === 'uploading') {
+    return '上传中';
+  }
+  return sendStatusLabel(status);
+}
+
 @Entry
 @Component
 struct Index {
   @State snap: ServiceSnapshot = new ServiceSnapshot();
   @State aliasDraft: string = '';
   @State hostDraft: string = '';
+  @State pinDraft: string = '';
+  /** The peer chosen as the send target; an empty fingerprint means none. */
+  @State target: PeerRow = new PeerRow();
 
   aboutToAppear(): void {
     const context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
@@ -31,7 +76,7 @@ struct Index {
       this.aliasDraft = snapshot.alias;
     });
     service.open(context).catch((reason: Object): void => {
-      service.reportError(`${reason}`);
+      service.reportError(`${describeFailure(reason)}`);
     });
   }
 
@@ -47,6 +92,7 @@ struct Index {
           this.header()
           this.controls()
           this.peers()
+          this.send()
           this.transfer()
           this.console()
         }
@@ -178,12 +224,129 @@ struct Index {
               .fontSize(11)
               .fontColor('#2E7D32')
           }
+          Button(this.target.fingerprint === peer.fingerprint ? '已选' : '发送')
+            .fontSize(12)
+            .backgroundColor(this.target.fingerprint === peer.fingerprint ? '#2E7D32' : '#E8E8E8')
+            .fontColor(this.target.fingerprint === peer.fingerprint ? Color.White : '#333333')
+            .onClick(() => {
+              this.target = peer;
+            })
         }
         .width('100%')
       }, (peer: PeerRow) => `${peer.host}:${peer.port}`)
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder send() {
+    Column({ space: 8 }) {
+      Text('发送文件')
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+
+      Row({ space: 8 }) {
+        Button('选择文档')
+          .fontSize(13)
+          .onClick(() => {
+            this.pickDocuments();
+          })
+        Button('选择图片')
+          .fontSize(13)
+          .onClick(() => {
+            this.pickPhotos();
+          })
+        Button('清空')
+          .fontSize(13)
+          .backgroundColor('#EEEEEE')
+          .fontColor('#333333')
+          .onClick(() => {
+            service.clearPicked();
+          })
+      }
+      .width('100%')
+
+      Text(this.target.name.length > 0 ? `目标设备 ${this.target.name} (${this.target.host})` : '先在上方设备行点“发送”选一台设备')
+        .fontSize(11)
+        .fontColor(this.target.name.length > 0 ? '#2E7D32' : '#999999')
+        .width('100%')
+
+      Text(this.snap.picked.length > 0 ? `已选 ${this.snap.picked.length} 个文件` : '尚未选择文件')
+        .fontSize(11)
+        .fontColor(this.snap.picked.length > 0 ? '#2E7D32' : '#999999')
+
+      ForEach(this.snap.picked, (item: FileRow) => {
+        Text(item.name)
+          .fontSize(11)
+          .fontColor('#666666')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+      }, (item: FileRow) => `${item.id}:${item.name}`)
+
+      Row({ space: 8 }) {
+        TextInput({ text: this.pinDraft, placeholder: '接收方 PIN（可选）' })
+          .layoutWeight(1)
+          .onChange((value: string) => {
+            this.pinDraft = value;
+          })
+        Button(this.snap.sendActive ? '取消发送' : '开始发送')
+          .fontSize(13)
+          .backgroundColor(this.snap.sendActive ? '#C62828' : '#2E7D32')
+          .fontColor(Color.White)
+          .onClick(() => {
+            this.toggleSend();
+          })
+      }
+      .width('100%')
+
+      if (this.snap.sendFiles.length > 0) {
+        Row() {
+          Text(`进度 ${formatBytes(this.snap.sendSent)} / ${formatBytes(this.snap.sendTotal)}`)
+            .fontSize(11)
+            .fontColor('#777777')
+            .layoutWeight(1)
+          Text(taskStatusLabel(this.snap.sendState))
+            .fontSize(11)
+            .fontColor('#777777')
+        }
+        .width('100%')
+
+        Progress({ value: this.snap.sendTotal === 0 ? 0 : this.snap.sendSent * 100 / this.snap.sendTotal })
+          .width('100%')
+
+        ForEach(this.snap.sendFiles, (item: FileRow) => {
+          Row() {
+            Text(item.name)
+              .fontSize(12)
+              .layoutWeight(1)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            Text(`${formatBytes(item.received)} / ${formatBytes(item.size)}`)
+              .fontSize(11)
+              .fontColor('#777777')
+            Text(sendStatusLabel(item.status))
+              .fontSize(11)
+              .fontColor(item.status === 'failed' ? '#C62828' : '#2E7D32')
+          }
+          .width('100%')
+        // ForEach only re-renders a row when its key changes, so every value the row draws belongs
+        // in the key — a stable id alone leaves the row frozen at whatever it first showed.
+        }, (item: FileRow) => `${item.id}:${item.status}:${item.received}`)
+      }
+
+      if (this.snap.sendError.length > 0) {
+        Text(this.snap.sendError)
+          .fontSize(11)
+          .fontColor('#C62828')
+          .width('100%')
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding(12)
+    .borderRadius(12)
+    .backgroundColor('#F5F5F5')
   }
 
   @Builder transfer() {
@@ -318,7 +481,7 @@ struct Index {
   /** Every action is fire-and-forget on screen; a rejected one still has to be reported. */
   private run(action: Promise<void>): void {
     action.catch((reason: Object): void => {
-      service.reportError(`${reason}`);
+      service.reportError(`${describeFailure(reason)}`);
     });
   }
 
@@ -329,5 +492,57 @@ struct Index {
     }
     this.hostDraft = '';
     this.run(service.addKnownHost(spec));
+  }
+
+  private toggleSend(): void {
+    if (this.snap.sendActive) {
+      service.cancelSend();
+      return;
+    }
+    if (this.target.fingerprint.length === 0) {
+      service.reportError('还没选择目标设备');
+      return;
+    }
+    service.startSend(this.target.fingerprint, this.pinDraft.trim());
+  }
+
+  /**
+   * Both pickers are the system ones, so no media or file permission is requested: the returned uris
+   * carry the temporary read grant with them.
+   */
+  private pickDocuments(): void {
+    const context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+    // The picker may answer with a single uri per invocation on a phone, so picks accumulate in the
+    // service rather than replacing each other.
+    const options: picker.DocumentSelectOptions = {
+      maxSelectNumber: MAX_PICK
+    };
+    const docPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(context);
+    docPicker.select(options).then((uris: string[]): void => {
+      this.applyPicked(uris);
+    }).catch((reason: BusinessError): void => {
+      service.reportError(`选择文档失败: ${reason.message}`);
+    });
+  }
+
+  private pickPhotos(): void {
+    const options: picker.PhotoSelectOptions = {
+      MIMEType: picker.PhotoViewMIMETypes.IMAGE_VIDEO_TYPE,
+      maxSelectNumber: MAX_PICK
+    };
+    const photoPicker: picker.PhotoViewPicker = new picker.PhotoViewPicker();
+    photoPicker.select(options).then((result: picker.PhotoSelectResult): void => {
+      this.applyPicked(result.photoUris);
+    }).catch((reason: BusinessError): void => {
+      service.reportError(`选择图片失败: ${reason.message}`);
+    });
+  }
+
+  /** An empty result is a dismissed dialog, not a failure worth a red line. */
+  private applyPicked(uris: string[]): void {
+    if (uris.length === 0) {
+      return;
+    }
+    service.addPicked(uris);
   }
 }

@@ -5,6 +5,7 @@ import {
 } from '../wire/Dto';
 import { Exchange, RequestHandler, ServerReply, replyEmpty, replyWithJson, replyWithMessage } from '../httpx/Exchange';
 import { Status } from '../httpx/Http';
+import { describeFailure } from '../util/Errors';
 import { concatBytes } from '../util/ByteBuffers';
 import { LayoutPlanner, PlannedPath } from './Layout';
 import { FileSink } from './FileSink';
@@ -119,7 +120,7 @@ export class SessionManager {
         plannedPaths = planAll(planner, files);
       } catch (e) {
         // A name that tries to escape the destination fails the offer rather than misfiling.
-        this.config.log(`prepare-upload rejected by name: ${e}`);
+        this.config.log(`prepare-upload rejected by name: ${describeFailure(e)}`);
         return replyWithMessage(Status.BadRequest, 'Invalid file name');
       }
       const paths: Map<string, PlannedPath> = plannedPaths === null ? new Map<string, PlannedPath>() : plannedPaths;
@@ -245,7 +246,7 @@ export class SessionManager {
       this.config.decide(context).then((decision: PrepareDecision): void => {
         finish({ cancelledBySender: false, decision: decision });
       }, (reason: Object): void => {
-        this.config.log(`decision handler failed: ${reason}`);
+        this.config.log(`decision handler failed: ${describeFailure(reason)}`);
         finish({ cancelledBySender: false, decision: { declined: true, acceptedFileIds: [] } });
       });
     });
@@ -323,7 +324,7 @@ export class SessionManager {
       try {
         sink = await FileSink.create(file.path, expected !== null);
       } catch (e) {
-        this.config.log(`cannot open ${file.path}: ${e}`);
+        this.config.log(`cannot open ${file.path}: ${describeFailure(e)}`);
         this.finalizeFile(session, file, SaveResult.FAILED);
         return replyWithMessage(Status.InternalError, 'Failed to save file');
       }
@@ -364,7 +365,7 @@ export class SessionManager {
       try {
         chunk = await exchange.body.read(UPLOAD_CHUNK);
       } catch (e) {
-        this.config.log(`body of ${file.fileName} aborted: ${e}`);
+        this.config.log(`body of ${file.fileName} aborted: ${describeFailure(e)}`);
         broken = true;
         break;
       }
@@ -380,7 +381,7 @@ export class SessionManager {
       try {
         await sink.write(chunk);
       } catch (e) {
-        this.config.log(`write of ${file.fileName} failed: ${e}`);
+        this.config.log(`write of ${file.fileName} failed: ${describeFailure(e)}`);
         await sink.close();
         return SaveResult.FAILED;
       }
@@ -410,7 +411,7 @@ export class SessionManager {
     try {
       actual = await sink.finish();
     } catch (e) {
-      this.config.log(`digest of ${file.fileName} failed: ${e}`);
+      this.config.log(`digest of ${file.fileName} failed: ${describeFailure(e)}`);
       return SaveResult.FAILED;
     }
     if (expectedSha !== null && actual !== null && !equalsIgnoreHexCase(expectedSha, actual)) {
@@ -528,7 +529,7 @@ export class SessionManager {
       try {
         chunk = await exchange.body.read(PREPARE_READ_STEP);
       } catch (e) {
-        this.config.log(`prepare-upload body aborted: ${e}`);
+        this.config.log(`prepare-upload body aborted: ${describeFailure(e)}`);
         return null;
       }
       if (chunk === null) {

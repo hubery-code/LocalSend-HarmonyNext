@@ -23,3 +23,7 @@ local.properties
 .DS_Store
 .idea/
 *.log
+
+# Cross-agent status mirror and python caches from the UI drivers
+.agent_status.json
+__pycache__/

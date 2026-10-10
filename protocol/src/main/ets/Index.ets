@@ -21,3 +21,4 @@ export * from './discovery/Multicast';
 export * from './discovery/Probing';
 export * from './discovery/Discovery';
 export * from './session/Index';
+export * from './send/Index';

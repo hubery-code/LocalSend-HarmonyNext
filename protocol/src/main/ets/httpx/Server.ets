@@ -4,6 +4,7 @@ import { ByteLink, PeerAddress } from '../transport/ByteLink';
 import { peerCertificateFingerprint, TcpAcceptedLink, TlsAcceptedLink, resolvePeer, unknownPeer } from '../transport/AcceptedLinks';
 import { HttpConnection } from './Connection';
 import { RequestHandler } from './Exchange';
+import { describeFailure } from '../util/Errors';
 import { MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP } from '../wire/Constants';
 
 export interface TlsMaterial {
@@ -65,7 +66,7 @@ export class HttpServer {
         try {
           this.onAccepted(conn);
         } catch (e) {
-          this.config.log(`tcp accept threw: ${e}`);
+          this.config.log(`tcp accept threw: ${describeFailure(e)}`);
         }
       });
       tcp.on('error', (err: BusinessError) => {
@@ -97,7 +98,7 @@ export class HttpServer {
       this.onTlsAccepted(conn);
     });
     tls.on('error', (err: BusinessError) => {
-      this.config.log(`tls server error code=${err.code} message=${err.message} raw=${err}`);
+      this.config.log(`tls server error code=${err.code} message=${err.message} raw=${describeFailure(err)}`);
     });
   }
 
@@ -117,7 +118,7 @@ export class HttpServer {
         this.accept(link);
       });
     }, (reason: Object) => {
-      this.config.log(`failed to resolve tls peer: ${reason}`);
+      this.config.log(`failed to resolve tls peer: ${describeFailure(reason)}`);
       this.accept(link);
     });
   }
@@ -128,7 +129,7 @@ export class HttpServer {
       link.updatePeer(address);
       this.accept(link);
     }, (reason: Object) => {
-      this.config.log(`failed to resolve tcp peer: ${reason}`);
+      this.config.log(`failed to resolve tcp peer: ${describeFailure(reason)}`);
       this.accept(link);
     });
   }
@@ -186,7 +187,7 @@ export class HttpServer {
         await this.tls.close();
       }
     } catch (e) {
-      this.config.log(`listener close reported: ${e}`);
+      this.config.log(`listener close reported: ${describeFailure(e)}`);
     }
   }
 }

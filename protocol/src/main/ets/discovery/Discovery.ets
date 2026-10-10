@@ -7,6 +7,7 @@ import { ClientCredentials } from '../transport/DialedLinks';
 import { Identity } from '../identity/Identity';
 import { Exchange, RequestHandler, ServerReply, replyWithJson, replyWithMessage } from '../httpx/Exchange';
 import { Status } from '../httpx/Http';
+import { describeFailure } from '../util/Errors';
 import { getLocalIpv4Interfaces, LocalInterface } from '../util/NetIF';
 import { NewPeer, Peer, PeerSource, PeerStore } from './Peer';
 import { AnnouncementSink, DiscoveryLogger, MulticastChannel, ReceivedAnnouncement } from './Multicast';
@@ -79,7 +80,7 @@ export class Discovery {
     try {
       this.interfaces = await getLocalIpv4Interfaces();
     } catch (e) {
-      this.config.log(`interface enumeration failed: ${e}`);
+      this.config.log(`interface enumeration failed: ${describeFailure(e)}`);
       this.interfaces = [];
     }
     this.scanner = new SubnetScanner(this.probeOptions(DISCOVERY_TIMEOUT_MS));
@@ -90,7 +91,7 @@ export class Discovery {
       this.channel = await MulticastChannel.open(this.interfaces, this.config.port, this.config.group,
         sink, this.config.log);
     } catch (e) {
-      this.config.log(`multicast discovery unavailable, using http discovery: ${e}`);
+      this.config.log(`multicast discovery unavailable, using http discovery: ${describeFailure(e)}`);
       this.channel = null;
     }
   }
@@ -210,7 +211,7 @@ export class Discovery {
       .then((outcome: ProbeOutcome): void => {
         this.applyProbe(outcome, PeerSource.REGISTER);
       }, (reason: Object): void => {
-        this.config.log(`register reply to ${host} failed: ${reason}`);
+        this.config.log(`register reply to ${host} failed: ${describeFailure(reason)}`);
       });
   }
 

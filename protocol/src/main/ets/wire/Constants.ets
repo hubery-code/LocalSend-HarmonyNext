@@ -30,7 +30,11 @@ export const SCAN_MAX_INTERFACES: number = 3;
 /** Parallel upload streams per send task. */
 export const UPLOAD_CONCURRENCY: number = 2;
 
-/** Retries allowed for one file after a 422 checksum mismatch. */
+/**
+ * Attempts one file may make before the transfer gives up on it. Both halves read it the same way:
+ * the receiver resets a checksum mismatch to pending while `attempts < MAX_UPLOAD_ATTEMPTS`, and the
+ * sender stops at the same count, so neither side can exhaust the other's patience.
+ */
 export const MAX_UPLOAD_ATTEMPTS: number = 3;
 
 /** Wrong-PIN attempts tolerated per source IP before 429. */

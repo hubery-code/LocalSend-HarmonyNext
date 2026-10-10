@@ -3,6 +3,7 @@ import { Dto, WireDeviceInfo, WireInfoResponse } from '../wire/Dto';
 import { parseRecord } from '../wire/JsonValue';
 import { ClientCredentials } from '../transport/DialedLinks';
 import { HttpClient, JsonResponse, Target } from '../httpx/Client';
+import { describeFailure } from '../util/Errors';
 import { LocalInterface, subnetHosts } from '../util/NetIF';
 import { DiscoveryLogger } from './Multicast';
 
@@ -63,7 +64,7 @@ export async function probeRegister(host: string, port: number, scheme: Protocol
   } catch (e) {
     // A non-LocalSend host on this port fails to connect or fails to answer; both are expected.
     return { host: host, port: port, scheme: scheme, response: null, certFingerprint: null,
-      error: `${e}` };
+      error: `${describeFailure(e)}` };
   }
 }
 

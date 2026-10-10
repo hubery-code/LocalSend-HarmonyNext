@@ -1,6 +1,7 @@
 import { util } from '@kit.ArkTS';
 import { ByteLink } from '../transport/ByteLink';
 import { HttpRequestHead, Status, framingOf, parseRequestHead, setHeader } from './Http';
+import { describeFailure } from '../util/Errors';
 import { ByteQueue, bytesToAscii } from './Framing';
 import {
   BodySource, ChunkSink, Exchange, RequestHandler, ServerReply, replyWithMessage
@@ -193,7 +194,7 @@ export class HttpConnection {
     try {
       reply = await handler(exchange);
     } catch (e) {
-      this.log(`handler ${request.path} threw: ${e}`);
+      this.log(`handler ${request.path} threw: ${describeFailure(e)}`);
       await this.failRequest(Status.InternalError, 'Internal error');
       return;
     }
@@ -235,7 +236,7 @@ export class HttpConnection {
         await reply.stream(new ChunkSink(this.link));
       }
     } catch (e) {
-      this.close(`write failed: ${e}`);
+      this.close(`write failed: ${describeFailure(e)}`);
     }
     if (!keepAlive) {
       this.close('response complete, closing');

@@ -69,3 +69,24 @@ export function describePlatformError(e: Object, prefix: string): string {
   const biz: BusinessError = e as BusinessError;
   return prefix + ': ' + biz.message + ' [code=' + platformErrorCode(e) + ']';
 }
+
+/**
+ * Reads a caught value as text.
+ *
+ * A template interpolation is not enough on this runtime: an `Error` stringifies to
+ * `[object Object]`, which turns a log line into noise exactly when it matters. BusinessError
+ * carries `message`/`code` rather than a usable `toString`, so both shapes are pulled out here.
+ */
+export function describeFailure(value: Object): string {
+  if (typeof value === 'string') {
+    return value as string;
+  }
+  const error: Error = value as Error;
+  const message: string = error.message;
+  const code: number = platformErrorCode(value);
+  const name: string = error.name.length > 0 ? error.name : 'Error';
+  if (code > 0) {
+    return `${name}: ${message} [code=${code}]`;
+  }
+  return message.length > 0 ? `${name}: ${message}` : name;
+}

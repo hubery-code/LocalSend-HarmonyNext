@@ -1,5 +1,6 @@
 import { fileIo } from '@kit.CoreFileKit';
 import { SanitizeRules, resolveConflict, sanitizeFileName } from '../util/FileName';
+import { describeFailure } from '../util/Errors';
 import { assertNoTraversal } from '../util/PathSafety';
 
 /**
@@ -40,7 +41,7 @@ export async function ensureDirectory(dir: string): Promise<void> {
     await fileIo.mkdir(dir, true);
   } catch (e) {
     if (!exists(dir)) {
-      throw new Error(`mkdir ${dir} failed: ${e}`);
+      throw new Error(`mkdir ${dir} failed: ${describeFailure(e)}`);
     }
   }
 }
