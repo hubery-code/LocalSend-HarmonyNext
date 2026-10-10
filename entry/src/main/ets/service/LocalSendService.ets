@@ -1,4 +1,6 @@
 import { common } from '@kit.AbilityKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+
 import {
   ApiPath, DEFAULT_PORT, DestinationContext, DeviceTypeValue, Discovery, FileProgressEvent, FileStatus,
   HttpServer, Identity, IdentityRepository, KnownChannel, PrepareContext, PrepareDecision, PROTOCOL_VERSION,
@@ -6,6 +8,9 @@ import {
   SessionManagerConfig, TlsMaterial, WireDeviceInfo
 } from '@lsnext/protocol';
 import { AppPrefs } from './AppPrefs';
+import { formatHostSpec, parseHostSpec, sameHost } from './HostSpec';
+/** hilog tag; 0x0000 keeps us inside the app's own log domain. */
+const TAG: string = 'LocalSendNext';
 
 /** What the page draws. A fresh snapshot per change keeps ArkUI's @State diffing honest. */
 export class PeerRow {
@@ -41,6 +46,7 @@ export class ServiceSnapshot {
   hasSession: boolean = false;
   sessionSender: string = '';
   sessionFiles: FileRow[] = [];
+  hosts: string[] = [];
   log: string[] = [];
 }
 
@@ -70,6 +76,7 @@ export class LocalSendService {
   private running: boolean = false;
   private aliasText: string = '';
   private encryption: boolean = false;
+  private known: KnownChannel[] = [];
 
   /** Called by the page in aboutToAppear; the service never holds a UI object. */
   attach(listener: (snapshot: ServiceSnapshot) => void): void {
@@ -85,6 +92,7 @@ export class LocalSendService {
     this.filesDir = context.filesDir;
     this.aliasText = this.prefs.alias();
     this.encryption = this.prefs.encryption();
+    this.known = this.readKnown();
     // Resolve the identity now so the UI can show a fingerprint before the server runs.
     this.identity = await new IdentityRepository(this.prefs).resolve(this.encryption, '');
     if (this.prefs.receiving()) {
@@ -177,8 +185,10 @@ export class LocalSendService {
         certPem: identity.certPem,
         keyPem: identity.keyPem,
         keyPassword: identity.keyPassword,
-        // Official servers demand a client certificate; HarmonyOS validates a requested one
-        // against its trust store, so this stays off until the handshake spike proves it.
+        // Verified on the emulator: once we *request* a client certificate, the HarmonyOS TLS
+        // stack validates it against its trust store and answers `unknown ca` to LocalSend's
+        // self-signed device certificates. The official client still connects when we do not
+        // ask, so encryption works both ways — only the peer's proven fingerprint is lost.
         requestClientCertificate: false
       }
       : null;
@@ -223,13 +233,59 @@ export class LocalSendService {
   }
 
   /** Discovery with no multicast: probe the addresses the user or a previous run knows. */
-  async refresh(channels: KnownChannel[]): Promise<void> {
+  /**
+   * Adds `[scheme://]host[:port]` to the saved leads. Without multicast these are the only
+   * addresses discovery has to work from, so they persist across launches.
+   */
+  async addKnownHost(spec: string): Promise<void> {
+    const channel: KnownChannel | null = parseHostSpec(spec);
+    if (channel === null) {
+      this.reportError(`无法识别的地址: ${spec}`);
+      return;
+    }
+    for (let i = 0; i < this.known.length; i++) {
+      if (sameHost(this.known[i], channel)) {
+        return;
+      }
+    }
+    this.known.push(channel);
+    await this.persistKnown();
+    this.emit();
+  }
+
+  async refresh(): Promise<void> {
     if (this.discovery === null) {
       this.log('接收未开启，无法发现设备');
       return;
     }
-    await this.discovery.discoverStaged(channels);
+    await this.discovery.discoverStaged(this.known);
     this.emit();
+  }
+
+  private readKnown(): KnownChannel[] {
+    const channels: KnownChannel[] = [];
+    if (this.prefs === null) {
+      return channels;
+    }
+    const specs: string[] = this.prefs.knownHosts();
+    for (let i = 0; i < specs.length; i++) {
+      const channel: KnownChannel | null = parseHostSpec(specs[i]);
+      if (channel !== null) {
+        channels.push(channel);
+      }
+    }
+    return channels;
+  }
+
+  private async persistKnown(): Promise<void> {
+    if (this.prefs === null) {
+      return;
+    }
+    const specs: string[] = [];
+    for (let i = 0; i < this.known.length; i++) {
+      specs.push(formatHostSpec(this.known[i]));
+    }
+    await this.prefs.setKnownHosts(specs);
   }
 
   peers(): Peer[] {
@@ -337,6 +393,9 @@ export class LocalSendService {
   // ------------------------------------------------------------------ snapshot
 
   private log(message: string): void {
+    // The on-screen console is not enough once the app is out of sight: the same lines have to
+    // be reachable from `hdc shell hilog` while debugging a transfer.
+    hilog.info(0x0000, TAG, '%{public}s', message);
     this.logLines.push(message);
     if (this.logLines.length > 120) {
       this.logLines.splice(0, this.logLines.length - 120);
@@ -424,6 +483,11 @@ export class LocalSendService {
     snapshot.hasSession = this.session !== null;
     snapshot.sessionSender = this.session === null ? '' : this.session.senderAlias;
     snapshot.sessionFiles = this.sessionFiles();
+    const specs: string[] = [];
+    for (let i = 0; i < this.known.length; i++) {
+      specs.push(formatHostSpec(this.known[i]));
+    }
+    snapshot.hosts = specs;
     snapshot.log = this.logLines.slice(0);
     listener(snapshot);
   }

@@ -118,11 +118,9 @@ export async function generateSelfSigned(): Promise<SelfSignedMaterial> {
       buildExtensions()
     ]);
 
-    const signer: cryptoFramework.Sign = cryptoFramework.createSign('SHA256|RSA');
+    const signer: cryptoFramework.Sign = cryptoFramework.createSign('RSA2048|PKCS1|SHA256');
     await signer.init(keyPair.priKey);
-    const tbsBlob: cryptoFramework.DataBlob = { data: tbs };
-    await signer.update(tbsBlob);
-    const signature: cryptoFramework.DataBlob = await signer.sign(null);
+    const signature: cryptoFramework.DataBlob = await signer.sign({ data: tbs });
 
     const certDer: Uint8Array = derSequence([
       tbs,

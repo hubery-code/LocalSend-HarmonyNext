@@ -1,5 +1,4 @@
 import { common } from '@kit.AbilityKit';
-import { KnownChannel, ProtocolScheme } from '@lsnext/protocol';
 import { FileRow, LocalSendService, PeerRow, ServiceSnapshot } from '../service/LocalSendService';
 
 /** One controller for the whole app: the page is rebuilt on rotation and must not restart it. */
@@ -24,7 +23,6 @@ struct Index {
   @State snap: ServiceSnapshot = new ServiceSnapshot();
   @State aliasDraft: string = '';
   @State hostDraft: string = '';
-  private known: KnownChannel[] = [];
 
   aboutToAppear(): void {
     const context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
@@ -120,8 +118,14 @@ struct Index {
       }
       .width('100%')
 
+      Text(this.snap.encryption ? '当前系统的 TLS 服务端会乱序投递大文件，请仅在局域网可信环境下使用' : '')
+        .fontSize(10)
+        .fontColor('#B26A00')
+        .visibility(this.snap.encryption ? Visibility.Visible : Visibility.None)
+        .width('100%')
+
       Row({ space: 8 }) {
-        TextInput({ text: this.hostDraft, placeholder: '手动添加 IP，如 10.0.2.2' })
+        TextInput({ text: this.hostDraft, placeholder: '添加设备 https://ip:53317' })
           .layoutWeight(1)
           .onChange((value: string) => {
             this.hostDraft = value;
@@ -132,10 +136,16 @@ struct Index {
           })
         Button('发现')
           .onClick(() => {
-            this.run(service.refresh(this.known));
+            this.run(service.refresh());
           })
       }
       .width('100%')
+
+      ForEach(this.snap.hosts, (spec: string) => {
+        Text(`已保存 ${spec}`)
+          .fontSize(11)
+          .fontColor('#777777')
+      }, (spec: string) => spec)
     }
     .width('100%')
     .padding(12)
@@ -313,12 +323,11 @@ struct Index {
   }
 
   private addHost(): void {
-    const host: string = this.hostDraft.trim();
-    if (host.length === 0) {
+    const spec: string = this.hostDraft.trim();
+    if (spec.length === 0) {
       return;
     }
-    const channel: KnownChannel = { host: host, port: 53317, protocol: ProtocolScheme.HTTP };
-    this.known.push(channel);
     this.hostDraft = '';
+    this.run(service.addKnownHost(spec));
   }
 }

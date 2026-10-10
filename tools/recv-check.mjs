@@ -1,11 +1,13 @@
 // Protocol-level receiver test: speaks the LocalSend v2.2 sender API against the
 // HarmonyOS app running on the emulator (reached through `hdc fport`).
 import http from 'node:http';
+import https from 'node:https';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 const HOST = '127.0.0.1';
 const PORT = 53317;
+const USE_TLS = process.env.LS_TLS === '1';
 const BASE = `/api/localsend/v2`;
 const MY_FINGERPRINT = 'TESTSENDER00000000000000000000000000000000000000000000000000000A';
 
@@ -16,7 +18,7 @@ const info = {
   deviceType: 'desktop',
   fingerprint: MY_FINGERPRINT,
   port: PORT,
-  protocol: 'http',
+  protocol: USE_TLS ? 'https' : 'http',
   download: false,
 };
 
@@ -28,7 +30,9 @@ function request(method, path, body, extraHeaders) {
     const payload = body === undefined ? null : typeof body === 'string' ? Buffer.from(body, 'utf8') : body;
     const headers = { ...JSON_HEADERS, ...(extraHeaders || {}) };
     if (payload !== null) headers['content-length'] = payload.length;
-    const req = http.request({ host: HOST, port: PORT, method, path, headers }, (res) => {
+    const transport = USE_TLS ? https : http;
+    const options = { host: HOST, port: PORT, method, path, headers, rejectUnauthorized: false };
+    const req = transport.request(options, (res) => {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end', () =>

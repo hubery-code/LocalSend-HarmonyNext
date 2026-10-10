@@ -1,7 +1,7 @@
 import { socket } from '@kit.NetworkKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { ByteLink, PeerAddress } from '../transport/ByteLink';
-import { TcpAcceptedLink, TlsAcceptedLink, resolvePeer } from '../transport/AcceptedLinks';
+import { peerCertificateFingerprint, TcpAcceptedLink, TlsAcceptedLink, resolvePeer, unknownPeer } from '../transport/AcceptedLinks';
 import { HttpConnection } from './Connection';
 import { RequestHandler } from './Exchange';
 import { MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP } from '../wire/Constants';
@@ -15,6 +15,12 @@ export interface TlsMaterial {
    * for it here too — but HarmonyOS validates a requested certificate against its trust store, and
    * a LAN peer's certificate is self-signed, so this stays configurable and defaults to off until
    * verified against the official client.
+   *
+   * Measured on the emulator SDK: `TLSSocketServer` hands decrypted records to JavaScript out of
+   * order (about one 8 KiB record in fourteen), so a multi-megabyte upload keeps its byte count
+   * while its bytes land scrambled. The ciphertext reaches us in order — the MACs seal — so the
+   * defect is below us and cannot be repaired by reordering opaque body bytes. Plain HTTP is
+   * therefore the default, and encryption stays opt-in until the path is verified on a device.
    */
   requestClientCertificate: boolean;
 }
@@ -56,7 +62,11 @@ export class HttpServer {
       const tcp: socket.TCPSocketServer = socket.constructTCPSocketServerInstance();
       this.tcp = tcp;
       tcp.on('connect', (conn: socket.TCPSocketConnection) => {
-        this.onAccepted(conn);
+        try {
+          this.onAccepted(conn);
+        } catch (e) {
+          this.config.log(`tcp accept threw: ${e}`);
+        }
       });
       tcp.on('error', (err: BusinessError) => {
         this.config.log(`tcp server error ${err.code} ${err.message}`);
@@ -79,28 +89,47 @@ export class HttpServer {
       secureOptions: secureOptions,
       ALPNProtocols: ['http/1.1']
     };
+    await tls.listen(options);
+    // Unlike the TCP server, a TLS server drops callbacks registered before listen(): the native
+    // side then logs `CallOnConnectCallback fun === null` and hands accepted connections to nobody,
+    // so every request stalls. Subscribe only once the listener exists.
     tls.on('connect', (conn: socket.TLSSocketConnection) => {
       this.onTlsAccepted(conn);
     });
     tls.on('error', (err: BusinessError) => {
-      this.config.log(`tls server error ${err.code} ${err.message}`);
+      this.config.log(`tls server error code=${err.code} message=${err.message} raw=${err}`);
     });
-    await tls.listen(options);
   }
 
   private onTlsAccepted(conn: socket.TLSSocketConnection): void {
-    resolvePeer(conn, 0).then((peer: PeerAddress) => {
-      this.accept(new TlsAcceptedLink(conn, peer));
+    // The link is built here, not after the peer lookup: subscribing to `message` synchronously is
+    // what keeps the record stream in order, and anything that arrives during the lookup is buffered.
+    const link: TlsAcceptedLink = new TlsAcceptedLink(conn, unknownPeer(), null);
+    const ask: boolean = this.config.tls !== null && this.config.tls.requestClientCertificate;
+    resolvePeer(conn, 0).then((address: PeerAddress) => {
+      link.updatePeer(address);
+      if (!ask) {
+        this.accept(link);
+        return;
+      }
+      peerCertificateFingerprint(conn).then((value: string | null) => {
+        link.setCertFingerprint(value);
+        this.accept(link);
+      });
     }, (reason: Object) => {
       this.config.log(`failed to resolve tls peer: ${reason}`);
+      this.accept(link);
     });
   }
 
   private onAccepted(conn: socket.TCPSocketConnection): void {
-    resolvePeer(conn, 0).then((peer: PeerAddress) => {
-      this.accept(new TcpAcceptedLink(conn, peer));
+    const link: TcpAcceptedLink = new TcpAcceptedLink(conn, unknownPeer());
+    resolvePeer(conn, 0).then((address: PeerAddress) => {
+      link.updatePeer(address);
+      this.accept(link);
     }, (reason: Object) => {
       this.config.log(`failed to resolve tcp peer: ${reason}`);
+      this.accept(link);
     });
   }
 

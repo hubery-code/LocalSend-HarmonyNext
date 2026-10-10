@@ -11,6 +11,7 @@ const KEY_KEY_PASSWORD: string = 'keyPassword';
 const KEY_FINGERPRINT: string = 'fingerprint';
 const KEY_ENCRYPTION: string = 'encryption';
 const KEY_RECEIVING: string = 'receiving';
+const KEY_KNOWN_HOSTS: string = 'knownHosts';
 
 /**
  * The app's settings and the device identity, in one preferences file.
@@ -87,6 +88,20 @@ export class AppPrefs implements IdentityStore {
 
   async setReceiving(enabled: boolean): Promise<void> {
     this.prefs.putSync(KEY_RECEIVING, enabled);
+    await this.prefs.flush();
+  }
+
+  /**
+   * Addresses the user added by hand. Without multicast there is nothing else to point
+   * discovery at, so these have to survive a restart.
+   */
+  knownHosts(): string[] {
+    const stored: string[] = this.prefs.getSync(KEY_KNOWN_HOSTS, []) as string[];
+    return stored.slice(0);
+  }
+
+  async setKnownHosts(specs: string[]): Promise<void> {
+    this.prefs.putSync(KEY_KNOWN_HOSTS, specs.slice(0));
     await this.prefs.flush();
   }
 }
