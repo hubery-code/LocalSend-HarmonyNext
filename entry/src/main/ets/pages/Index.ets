@@ -2,7 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { picker } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { describeFailure } from '@lsnext/protocol';
-import { FileRow, LocalSendService, PeerRow, ServiceSnapshot } from '../service/LocalSendService';
+import { FileRow, LocalSendService, PeerRow, ReceivedRow, ServiceSnapshot } from '../service/LocalSendService';
 
 /** One controller for the whole app: the page is rebuilt on rotation and must not restart it. */
 const service: LocalSendService = new LocalSendService();
@@ -113,6 +113,7 @@ struct Index {
           this.send()
           this.webShare()
           this.transfer()
+          this.received()
           this.console()
           this.about()
         }
@@ -624,6 +625,51 @@ struct Index {
       .padding(12)
       .borderRadius(12)
       .backgroundColor('#EEEEEE')
+    }
+  }
+
+  /**
+   * The last finished receive, with a save button per file: files land in the app's own
+   * directory first, and getting them out of it is a user-driven step.
+   */
+  @Builder received() {
+    if (this.snap.lastReceived.length > 0) {
+      Column({ space: 6 }) {
+        Text('最近接收')
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+        ForEach(this.snap.lastReceived, (file: ReceivedRow) => {
+          Row({ space: 8 }) {
+            Column({ space: 2 }) {
+              Text(file.name)
+                .fontSize(12)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+              Text(formatBytes(file.size))
+                .fontSize(10)
+                .fontColor('#777777')
+            }
+            .layoutWeight(1)
+            .alignItems(HorizontalAlign.Start)
+
+            Button(file.saved ? '已保存' : '保存')
+              .fontSize(12)
+              .enabled(!file.saved && this.snap.savingId === '')
+              .onClick(() => {
+                service.saveReceived(file.id);
+              })
+          }
+          .width('100%')
+        }, (file: ReceivedRow) => `${file.id}:${file.saved}`)
+        Text('“保存”把文件移出应用目录：图片和视频存入相册，其他文件由你选择位置')
+          .fontSize(10)
+          .fontColor('#999999')
+      }
+      .width('100%')
+      .padding(12)
+      .borderRadius(12)
+      .backgroundColor('#EEEEEE')
+      .alignItems(HorizontalAlign.Start)
     }
   }
 

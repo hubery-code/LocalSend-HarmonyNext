@@ -1,5 +1,7 @@
 import { common, wantAgent, WantAgent } from '@kit.AbilityKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
+import { fileIo as fs, fileUri, picker } from '@kit.CoreFileKit';
+import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 import {
@@ -35,6 +37,13 @@ export class FileRow {
   status: string = '';
 }
 
+/** A file of the last finished session, with what a save target needs to take it from the sandbox. */
+export class ReceivedRow extends FileRow {
+  path: string = '';
+  fileType: string = '';
+  saved: boolean = false;
+}
+
 export class ServiceSnapshot {
   running: boolean = false;
   alias: string = '';
@@ -51,6 +60,10 @@ export class ServiceSnapshot {
   hasSession: boolean = false;
   sessionSender: string = '';
   sessionFiles: FileRow[] = [];
+  /** Files from the last finished session that are still sitting in the sandbox. */
+  lastReceived: ReceivedRow[] = [];
+  /** The row whose save target is open, so the page can disable the other save buttons. */
+  savingId: string = '';
   hosts: string[] = [];
   /** Files the user has picked to send, not sent yet. */
   picked: FileRow[] = [];
@@ -82,6 +95,12 @@ export class ServiceSnapshot {
 /** The directory files land in, decided once per app run. */
 const RECEIVE_SUBDIR: string = '/LocalSend';
 
+// How long a save button keeps waiting on a system dialog before unlocking. The photo dialog is a
+// single confirm; the document picker means browsing folders, where a person can legitimately take
+// minutes. A picker that answers after its deadline still completes on its own (see withDeadline).
+const GALLERY_TIMEOUT_MS: number = 60000;
+const DOCUMENT_TIMEOUT_MS: number = 300000;
+
 /**
  * The app-side controller: identity, HTTP server, discovery and the receive session
  * engine, wired together and mirrored into one snapshot for the page.
@@ -105,6 +124,8 @@ export class LocalSendService {
   private resolveOffer: ((decision: PrepareDecision) => void) | null = null;
   private offer: PrepareContext | null = null;
   private session: ReceiveSession | null = null;
+  private received: ReceivedRow[] = [];
+  private savingId: string = '';
   private running: boolean = false;
   private aliasText: string = '';
   private encryption: boolean = false;
@@ -749,6 +770,149 @@ export class LocalSendService {
     this.emit();
   }
 
+  /**
+   * Files of a finished session that still only exist in the sandbox. They are kept until the next
+   * session takes their place, because handing them out of the sandbox is a separate, user-driven
+   * step: the gallery dialog or the document picker.
+   */
+  private collectReceived(session: ReceiveSession): void {
+    const rows: ReceivedRow[] = [];
+    session.files.forEach((file: ReceivedFile) => {
+      if (file.status !== FileStatus.FINISHED) {
+        return;
+      }
+      const row: ReceivedRow = new ReceivedRow();
+      row.id = file.fileId;
+      row.name = file.fileName;
+      row.size = file.size;
+      row.received = file.receivedBytes;
+      row.status = file.status;
+      row.path = file.path;
+      row.fileType = file.fileType;
+      rows.push(row);
+    });
+    if (rows.length > 0) {
+      this.received = rows;
+    }
+  }
+
+  /**
+   * Hands one received file to the system. Media goes through the photo picker's creation dialog —
+   * the only way into the gallery without holding a restricted write permission — and everything
+   * else through the document picker, which asks the user for a destination folder.
+   */
+  async saveReceived(fileId: string): Promise<void> {
+    if (this.savingId !== '') {
+      return;
+    }
+    let row: ReceivedRow | null = null;
+    for (let i = 0; i < this.received.length; i++) {
+      const candidate: ReceivedRow = this.received[i];
+      if (candidate.id === fileId && !candidate.saved) {
+        row = candidate;
+      }
+    }
+    if (row === null) {
+      return;
+    }
+    const target: ReceivedRow = row;
+    this.savingId = fileId;
+    this.emit();
+    try {
+      if (target.fileType.startsWith('image/') || target.fileType.startsWith('video/')) {
+        await this.saveToGallery(target);
+      } else {
+        await this.saveToDocuments(target);
+      }
+    } catch (e) {
+      this.log(`保存失败: ${describeFailure(e)}`);
+    }
+    this.savingId = '';
+    this.emit();
+  }
+
+  private async saveToGallery(row: ReceivedRow): Promise<void> {
+    const context: common.UIAbilityContext | null = this.abilityContext;
+    if (context === null) {
+      return;
+    }
+    const video: boolean = row.fileType.startsWith('video/');
+    const helper: photoAccessHelper.PhotoAccessHelper = photoAccessHelper.getPhotoAccessHelper(context);
+    const config: photoAccessHelper.PhotoCreationConfig = {
+      title: row.name,
+      fileNameExtension: extensionOf(row.name, video ? 'mp4' : 'jpg'),
+      photoType: video ? photoAccessHelper.PhotoType.VIDEO : photoAccessHelper.PhotoType.IMAGE
+    };
+    const sources: string[] = [fileUri.getUriFromPath(row.path)];
+    const work: Promise<string[]> = helper.showAssetsCreationDialog(sources, [config]);
+    const created: string[] | null = await withDeadline(work, GALLERY_TIMEOUT_MS);
+    if (created === null) {
+      this.log(`存入相册超时: ${row.name}`);
+      work.then((late: string[]): void => {
+        this.finishGallerySave(row, late);
+      }).catch((error: Object): void => {
+        this.log(`保存失败: ${describeFailure(error)}`);
+      });
+      return;
+    }
+    this.finishGallerySave(row, created);
+  }
+
+  private finishGallerySave(row: ReceivedRow, created: string[]): void {
+    if (created.length === 0) {
+      this.log(`存入相册已取消: ${row.name}`);
+      return;
+    }
+    row.saved = true;
+    this.log(`已存入相册: ${row.name}`);
+    this.emit();
+  }
+
+  private async saveToDocuments(row: ReceivedRow): Promise<void> {
+    const context: common.UIAbilityContext | null = this.abilityContext;
+    if (context === null) {
+      return;
+    }
+    const options: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
+    options.newFileNames = [row.name];
+    const instance: picker.DocumentViewPicker = new picker.DocumentViewPicker(context);
+    const work: Promise<string[]> = instance.save(options);
+    const picked: string[] | null = await withDeadline(work, DOCUMENT_TIMEOUT_MS);
+    if (picked === null) {
+      this.log(`保存超时: ${row.name}`);
+      // The file manager creates the destination as an empty file and only then answers us, so
+      // giving up here would leave 0 bytes behind. Finish the copy whenever it does answer.
+      work.then((late: string[]): void => {
+        this.finishDocumentSave(row, late);
+      }).catch((error: Object): void => {
+        this.log(`保存失败: ${row.name}: ${describeFailure(error)}`);
+      });
+      return;
+    }
+    this.finishDocumentSave(row, picked);
+  }
+
+  private finishDocumentSave(row: ReceivedRow, picked: string[]): void {
+    if (picked.length === 0) {
+      this.log(`保存已取消: ${row.name}`);
+      return;
+    }
+    try {
+      const destination: fs.File = fs.openSync(picked[0],
+        fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      try {
+        fs.copyFileSync(row.path, destination.fd);
+      } finally {
+        fs.closeSync(destination);
+      }
+      row.saved = true;
+      this.log(`已保存: ${row.name}`);
+      this.emit();
+    } catch (error) {
+      this.log(`保存失败: ${row.name}: ${describeFailure(error)}`);
+    }
+  }
+
   /** Used by the emulator test: a peer that never appears in discovery is added by hand. */
   private selfInfo(identity: Identity): WireDeviceInfo {
     const info: WireDeviceInfo = {
@@ -788,6 +952,7 @@ export class LocalSendService {
       onSessionEnded: (session: ReceiveSession, reason: SessionEndReason): void => {
         this.log(`session ${session.sessionId} ended: ${reason}`);
         this.session = null;
+        this.collectReceived(session);
         this.emit();
       },
       onFileUpdated: (session: ReceiveSession, file: ReceivedFile): void => {
@@ -913,6 +1078,9 @@ export class LocalSendService {
     snapshot.hasSession = this.session !== null;
     snapshot.sessionSender = this.session === null ? '' : this.session.senderAlias;
     snapshot.sessionFiles = this.sessionFiles();
+    // A fresh array each time: ArkUI's ForEach only re-diffs when the array it was handed changes.
+    snapshot.lastReceived = this.received.slice(0);
+    snapshot.savingId = this.savingId;
     const specs: string[] = [];
     for (let i = 0; i < this.known.length; i++) {
       specs.push(formatHostSpec(this.known[i]));
@@ -963,4 +1131,48 @@ function displayNameOf(uri: string): string {
   } catch (e) {
     return tail;
   }
+}
+
+/**
+ * The extension the photo picker's creation config demands, which refuses a config without one.
+ * The received name is the only hint: senders write their own mime type, often just
+ * `application/octet-stream`, so the mime cannot be trusted for this.
+ */
+function extensionOf(name: string, fallback: string): string {
+  const dot: number = name.lastIndexOf('.');
+  if (dot < 0 || dot === name.length - 1) {
+    return fallback;
+  }
+  return name.substring(dot + 1).toLowerCase();
+}
+
+/**
+ * A system picker that dies stays silent instead of rejecting — the emulator's photo picker does
+ * exactly that — so every picker call gets a deadline. `null` means the wait gave up; the caller
+ * keeps its own continuation attached to `work` so an answer that arrives late is not lost.
+ */
+function withDeadline<T>(work: Promise<T>, timeoutMs: number): Promise<T | null> {
+  return new Promise<T | null>((resolve: (value: T | null) => void,
+    reject: (reason: Object) => void): void => {
+    let settled: boolean = false;
+    const timer: number = setTimeout((): void => {
+      if (!settled) {
+        settled = true;
+        resolve(null);
+      }
+    }, timeoutMs);
+    work.then((value: T): void => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      }
+    }).catch((reason: Object): void => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        reject(reason);
+      }
+    });
+  });
 }
