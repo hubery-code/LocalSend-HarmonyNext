@@ -14,8 +14,8 @@ import { SendSource } from '../send/SendTypes';
 import { mimeTypeOf } from '../send/MimeTypes';
 import { UriStat, statUri } from '../util/FileStat';
 import { describeFailure } from '../util/Errors';
-import { DOWNLOAD_PAGE, SHARING_OFF_PAGE, webText } from './WebPages';
-import { WEB_I18N_PATH, WebOfferContext, WebOfferFile, WebShareConfig } from './WebTypes';
+import { DOWNLOAD_PAGE, SHARING_OFF_PAGE, UPLOAD_PAGE, webText } from './WebPages';
+import { WEB_I18N_PATH, WebOfferContext, WebOfferFile, WebShareConfig, WebShareMode } from './WebTypes';
 
 const DOWNLOAD_CHUNK: number = 64 * 1024;
 /** How often an unanswered browser request checks whether the browser is still there. */
@@ -38,8 +38,8 @@ interface WebSession {
 }
 
 /**
- * The web share: the Download API of spec sections 5.2 and 5.3, plus the page and the strings a
- * browser needs to use it.
+ * The web share: the Download API of spec sections 5.2 and 5.3 with the page a browser downloads
+ * through, plus the upload page that turns browsers into senders of the normal upload API.
  *
  * The contract follows `packages/core/src/http/server/web.rs` request for request, because a browser
  * is the client and browsers are unforgiving about the shape: the session id is the client address,
@@ -60,7 +60,7 @@ export class WebShare {
   private pinGuard: PinGuard = new PinGuard();
   /** The one browser whose request the user has not answered yet; a second gets 409. */
   private waitingIp: string | null = null;
-  private sharing: boolean = false;
+  private mode: WebShareMode = WebShareMode.IDLE;
 
   constructor(config: WebShareConfig) {
     this.config = config;
@@ -75,8 +75,17 @@ export class WebShare {
     return routes;
   }
 
+  /** True while either page is live; the download flag wants the narrower {@link isDownloading}. */
   isSharing(): boolean {
-    return this.sharing;
+    return this.mode !== WebShareMode.IDLE;
+  }
+
+  isDownloading(): boolean {
+    return this.mode === WebShareMode.DOWNLOAD;
+  }
+
+  isUploading(): boolean {
+    return this.mode === WebShareMode.UPLOAD;
   }
 
   offered(): WebOfferFile[] {
@@ -163,18 +172,35 @@ export class WebShare {
     this.sessions.clear();
     this.pinGuard.reset();
     this.waitingIp = null;
-    this.sharing = true;
+    this.mode = WebShareMode.DOWNLOAD;
     this.config.log(`网页传: 开始分享 ${order.length} 个文件，共 ${this.totalOffered()} 字节`);
     this.config.onChanged();
     return order.length;
   }
 
+  /**
+   * Switches `/` to the upload page.
+   *
+   * Browsers then talk to the normal upload API that the receive path already serves, so nothing
+   * needs offering here — but the modes are exclusive, because only one page can live at `/`.
+   */
+  acceptBrowserUploads(): void {
+    this.files = new Map<string, WebOfferFile>();
+    this.order = [];
+    this.sessions.clear();
+    this.pinGuard.reset();
+    this.waitingIp = null;
+    this.mode = WebShareMode.UPLOAD;
+    this.config.log('网页传: 开始接收浏览器上传');
+    this.config.onChanged();
+  }
+
   /** Stops offering, forgets every browser that was allowed, and hands `/` back to the 403 page. */
   stop(): void {
-    if (!this.sharing && this.order.length === 0) {
+    if (this.mode === WebShareMode.IDLE && this.order.length === 0) {
       return;
     }
-    this.sharing = false;
+    this.mode = WebShareMode.IDLE;
     this.files = new Map<string, WebOfferFile>();
     this.order = [];
     this.sessions.clear();
@@ -186,7 +212,7 @@ export class WebShare {
 
   /** Forgets state without logging; used when the server stops. */
   reset(): void {
-    this.sharing = false;
+    this.mode = WebShareMode.IDLE;
     this.files = new Map<string, WebOfferFile>();
     this.order = [];
     this.sessions.clear();
@@ -198,8 +224,11 @@ export class WebShare {
 
   indexHandler(): RequestHandler {
     return async (exchange: Exchange): Promise<ServerReply> => {
-      if (this.sharing) {
+      if (this.mode === WebShareMode.DOWNLOAD) {
         return replyWithHtml(Status.Ok, DOWNLOAD_PAGE);
+      }
+      if (this.mode === WebShareMode.UPLOAD) {
+        return replyWithHtml(Status.Ok, UPLOAD_PAGE);
       }
       return replyWithHtml(Status.Forbidden, SHARING_OFF_PAGE);
     };
@@ -221,7 +250,7 @@ export class WebShare {
 
   prepareDownloadHandler(): RequestHandler {
     return async (exchange: Exchange): Promise<ServerReply> => {
-      if (!this.sharing) {
+      if (!this.isDownloading()) {
         return replyWithMessage(Status.Forbidden, 'Web download not initialized.');
       }
       const ip: string = exchange.peerHost;
@@ -255,7 +284,7 @@ export class WebShare {
         this.waitingIp = null;
       }
       const current: WebSession | undefined = this.sessions.get(ip);
-      if (!accepted || !this.sharing || current === undefined) {
+      if (!accepted || !this.isDownloading() || current === undefined) {
         if (current !== undefined && !current.accepted) {
           this.sessions.delete(ip);
         }
@@ -328,7 +357,7 @@ export class WebShare {
 
   downloadHandler(): RequestHandler {
     return async (exchange: Exchange): Promise<ServerReply> => {
-      if (!this.sharing) {
+      if (!this.isDownloading()) {
         return replyWithMessage(Status.Forbidden, 'Web download not initialized.');
       }
       const query: Map<string, string> = exchange.request.query;

@@ -8,6 +8,16 @@ import { WireDeviceInfo } from '../wire/Dto';
 /** Not a LocalSend API path, but it belongs to the same web surface. */
 export const WEB_I18N_PATH: string = '/i18n.json';
 
+/**
+ * What the one page at `/` serves. The modes are exclusive because only one page can live at `/`:
+ * browsers either download what the phone offers, or upload files to it.
+ */
+export enum WebShareMode {
+  IDLE = 'idle',
+  DOWNLOAD = 'download',
+  UPLOAD = 'upload'
+}
+
 /** One file the phone offers to browsers, ready to be streamed from `uri`. */
 export interface WebOfferFile {
   fileId: string;

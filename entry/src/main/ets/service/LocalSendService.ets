@@ -1,4 +1,5 @@
-import { common } from '@kit.AbilityKit';
+import { common, wantAgent, WantAgent } from '@kit.AbilityKit';
+import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 import {
@@ -7,7 +8,7 @@ import {
   PrepareContext, PrepareDecision, PROTOCOL_VERSION, Peer, ProtocolScheme, ReceivedFile, ReceiveSession,
   RequestHandler, SendFile, SendFileStatus, SendSource, SendTarget, SendTask, SendTaskStatus, Sender,
   SenderConfig, SessionEndReason, SessionManager, SessionManagerConfig, TlsMaterial, WireDeviceInfo,
-  WebOfferContext, WebOfferFile, WebShare, WebShareConfig
+  WebOfferContext, WebOfferFile, WebShare, WebShareConfig, describeFailure
 } from '@lsnext/protocol';
 import { AppPrefs } from './AppPrefs';
 import { formatHostSpec, parseHostSpec, sameHost } from './HostSpec';
@@ -62,6 +63,7 @@ export class ServiceSnapshot {
   sendError: string = '';
   /** The web share (Download API): what is offered, where to open it, and who got in. */
   webSharing: boolean = false;
+  webUploading: boolean = false;
   webFiles: FileRow[] = [];
   webTotal: number = 0;
   webSent: number = 0;
@@ -72,6 +74,8 @@ export class ServiceSnapshot {
   webOfferAgent: string = '';
   webOfferFiles: number = 0;
   webOfferBytes: number = 0;
+  /** The receive PIN, or empty while senders need none. */
+  receivePin: string = '';
   log: string[] = [];
 }
 
@@ -92,6 +96,9 @@ export class LocalSendService {
   private discovery: Discovery | null = null;
   private sessions: SessionManager | null = null;
   private filesDir: string = '';
+  private abilityContext: common.UIAbilityContext | null = null;
+  /** True while the receive service holds a `dataTransfer` background task declaration. */
+  private backgroundRunning: boolean = false;
   private logLines: string[] = [];
   private listener: ((snapshot: ServiceSnapshot) => void) | null = null;
   /** Set while an offer is on screen; the page's accept/decline resolves it. */
@@ -121,6 +128,7 @@ export class LocalSendService {
     }
     this.prefs = await AppPrefs.open(context);
     this.filesDir = context.filesDir;
+    this.abilityContext = context;
     this.aliasText = this.prefs.alias();
     this.encryption = this.prefs.encryption();
     this.known = this.readKnown();
@@ -243,10 +251,12 @@ export class LocalSendService {
     discovery.setAnswerAnnouncements(true);
     discovery.announce();
     this.log(`receiving on :${DEFAULT_PORT} over ${identity.scheme}`);
+    await this.startBackgroundTask();
     this.emit();
   }
 
   private async shutdown(): Promise<void> {
+    await this.stopBackgroundTask();
     if (this.discovery !== null) {
       await this.discovery.stop();
       this.discovery = null;
@@ -274,6 +284,75 @@ export class LocalSendService {
 
   async close(): Promise<void> {
     await this.shutdown();
+  }
+
+  // ------------------------------------------------------------------ receive PIN
+
+  /** The PIN a sender must present; empty means none. */
+  receivePin(): string {
+    if (this.prefs === null) {
+      return '';
+    }
+    const pin: string | null = this.prefs.receivePin();
+    return pin === null ? '' : pin;
+  }
+
+  /**
+   * Sets or clears the receive PIN. The server reads it per request, so no restart is needed —
+   * a sender mid-transfer keeps the session it already earned.
+   */
+  async setReceivePin(pin: string): Promise<void> {
+    if (this.prefs === null) {
+      return;
+    }
+    await this.prefs.setReceivePin(pin.length === 0 ? null : pin);
+    this.log(pin.length === 0 ? '接收 PIN 已关闭' : '接收 PIN 已开启');
+    this.emit();
+  }
+
+  // ------------------------------------------------------------ background running
+
+  /**
+   * Holds a `dataTransfer` background task while receiving, so a transfer survives the app going to
+   * the background — which on this platform it otherwise does not.
+   *
+   * The mode is declared in module.json5; on a device or emulator that refuses the request the app
+   * keeps receiving while foregrounded, so the failure is logged rather than raised.
+   */
+  private async startBackgroundTask(): Promise<void> {
+    const context: common.UIAbilityContext | null = this.abilityContext;
+    if (context === null || this.backgroundRunning) {
+      return;
+    }
+    try {
+      const info: wantAgent.WantAgentInfo = {
+        wants: [{ bundleName: 'io.github.localsendnext.app', abilityName: 'EntryAbility' }],
+        operationType: wantAgent.OperationType.START_ABILITY,
+        requestCode: 101,
+        wantAgentFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG]
+      };
+      const agent: WantAgent = await wantAgent.getWantAgent(info);
+      await backgroundTaskManager.startBackgroundRunning(context,
+        backgroundTaskManager.BackgroundMode.DATA_TRANSFER, agent);
+      this.backgroundRunning = true;
+      this.log('后台任务已开启，退到后台仍可接收');
+    } catch (e) {
+      this.log(`后台任务开启失败，退到后台可能暂停接收: ${describeFailure(e)}`);
+    }
+  }
+
+  private async stopBackgroundTask(): Promise<void> {
+    const context: common.UIAbilityContext | null = this.abilityContext;
+    if (context === null || !this.backgroundRunning) {
+      return;
+    }
+    try {
+      await backgroundTaskManager.stopBackgroundRunning(context);
+      this.log('后台任务已停止');
+    } catch (e) {
+      this.log(`后台任务停止失败: ${describeFailure(e)}`);
+    }
+    this.backgroundRunning = false;
   }
 
   /** Discovery with no multicast: probe the addresses the user or a previous run knows. */
@@ -503,10 +582,30 @@ export class LocalSendService {
       this.reportError('选中的文件都读取不到');
       return;
     }
-    // Peers cache our announcement, so the new download flag only reaches them once we re-announce.
-    if (this.discovery !== null) {
-      this.discovery.announce();
+    this.announceWebState();
+    this.emit();
+  }
+
+  /**
+   * The other half of the page at `/`: browsers upload files to this phone through the normal upload
+   * API, which means the user still confirms each offer.
+   */
+  async toggleWebUpload(): Promise<void> {
+    const web: WebShare | null = this.web;
+    if (web !== null && web.isUploading()) {
+      this.stopWebShare();
+      return;
     }
+    if (!this.running) {
+      await this.setReceiving(true);
+    }
+    const ready: WebShare | null = this.web;
+    if (ready === null) {
+      this.reportError('接收未能开启，无法网页收取');
+      return;
+    }
+    ready.acceptBrowserUploads();
+    this.announceWebState();
     this.emit();
   }
 
@@ -515,13 +614,22 @@ export class LocalSendService {
     if (web !== null) {
       web.stop();
     }
+    this.announceWebState();
     this.emit();
+  }
+
+  /** Peers cache our announcement, so a mode change only reaches them once we re-announce. */
+  private announceWebState(): void {
+    if (this.discovery !== null && this.running) {
+      this.discovery.announce();
+    }
   }
 
   private webConfig(identity: Identity): WebShareConfig {
     const config: WebShareConfig = {
       self: (): WireDeviceInfo => this.selfInfo(identity),
-      // A share PIN belongs with the settings screen; until then the confirmation dialog is the gate.
+      // The download page's own PIN stays off: what guards it is the per-browser dialog. Browser
+      // uploads, which pass through the receive API, are the ones gated by the receive PIN.
       pin: (): string | null => null,
       decide: (context: WebOfferContext): Promise<boolean> => this.askWebVisitor(context),
       // A browser that hangs up leaves the sheet standing over a request nobody can serve anymore.
@@ -651,8 +759,9 @@ export class LocalSendService {
       fingerprint: identity.fingerprint,
       port: DEFAULT_PORT,
       protocol: identity.isHttps ? ProtocolScheme.HTTPS : ProtocolScheme.HTTP,
-      // `download` means "the browser download page is live", and only a running share is that.
-      download: this.web !== null && this.web.isSharing()
+      // `download` means "the browser download page is live": only download mode advertises it,
+      // because the pages the flag invites a browser to are exclusive.
+      download: this.web !== null && this.web.isDownloading()
     };
     return info;
   }
@@ -660,8 +769,11 @@ export class LocalSendService {
   private sessionConfig(identity: Identity): SessionManagerConfig {
     const config: SessionManagerConfig = {
       selfFingerprint: (): string => identity.fingerprint,
-      // The receive PIN guards the browser upload page; device-to-device trust comes from TLS.
-      pin: (): string | null => null,
+      // Read per request, so a PIN the user sets later applies to the next sender without a restart.
+      pin: (): string | null => {
+        const pin: string = this.receivePin();
+        return pin.length === 0 ? null : pin;
+      },
       destination: async (context: DestinationContext): Promise<string | null> => {
         this.log(`incoming ${context.fileCount} file(s), ${context.totalBytes} byte(s) `
           + `from ${context.info.alias} (${context.senderIp})`);
@@ -818,6 +930,8 @@ export class LocalSendService {
     const web: WebShare | null = this.web;
     const webOffer: WebOfferContext | null = this.webOffer;
     snapshot.webSharing = web !== null && web.isSharing();
+    snapshot.webUploading = web !== null && web.isUploading();
+    snapshot.receivePin = this.receivePin();
     snapshot.webFiles = this.webRows();
     snapshot.webTotal = web === null ? 0 : web.totalOffered();
     snapshot.webSent = web === null ? 0 : web.transferred();

@@ -12,6 +12,7 @@ const KEY_FINGERPRINT: string = 'fingerprint';
 const KEY_ENCRYPTION: string = 'encryption';
 const KEY_RECEIVING: string = 'receiving';
 const KEY_KNOWN_HOSTS: string = 'knownHosts';
+const KEY_RECEIVE_PIN: string = 'receivePin';
 
 /**
  * The app's settings and the device identity, in one preferences file.
@@ -102,6 +103,20 @@ export class AppPrefs implements IdentityStore {
 
   async setKnownHosts(specs: string[]): Promise<void> {
     this.prefs.putSync(KEY_KNOWN_HOSTS, specs.slice(0));
+    await this.prefs.flush();
+  }
+
+  /**
+   * The PIN every sender — a device or a browser upload — must present. Empty means "no PIN", which
+   * is the state the official clients default to.
+   */
+  receivePin(): string | null {
+    const stored: string = this.prefs.getSync(KEY_RECEIVE_PIN, '') as string;
+    return stored.length === 0 ? null : stored;
+  }
+
+  async setReceivePin(pin: string | null): Promise<void> {
+    this.prefs.putSync(KEY_RECEIVE_PIN, pin === null ? '' : pin);
     await this.prefs.flush();
   }
 }

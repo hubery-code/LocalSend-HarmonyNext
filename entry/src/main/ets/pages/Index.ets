@@ -70,6 +70,11 @@ function webStatusLabel(status: string): string {
   return '未下载';
 }
 
+/** Four digits, which is the shape the official clients hand out for web transfers. */
+function randomPin(): string {
+  return `${Math.floor(1000 + Math.random() * 9000)}`;
+}
+
 @Entry
 @Component
 struct Index {
@@ -77,6 +82,8 @@ struct Index {
   @State aliasDraft: string = '';
   @State hostDraft: string = '';
   @State pinDraft: string = '';
+  @State pinEdit: string = '';
+  @State showPinSheet: boolean = false;
   /** The peer chosen as the send target; an empty fingerprint means none. */
   @State target: PeerRow = new PeerRow();
 
@@ -107,6 +114,7 @@ struct Index {
           this.webShare()
           this.transfer()
           this.console()
+          this.about()
         }
         .width('100%')
         .alignItems(HorizontalAlign.Start)
@@ -119,6 +127,8 @@ struct Index {
         this.offerSheet()
       } else if (this.snap.hasWebOffer) {
         this.webSheet()
+      } else if (this.showPinSheet) {
+        this.pinSheet()
       }
     }
     .width('100%')
@@ -166,6 +176,36 @@ struct Index {
           })
       }
       .width('100%')
+
+      Row({ space: 8 }) {
+        Text('接收 PIN')
+          .fontSize(16)
+          .layoutWeight(1)
+        if (this.snap.receivePin.length > 0) {
+          Button('清除')
+            .fontSize(13)
+            .backgroundColor('#EEEEEE')
+            .fontColor('#333333')
+            .onClick(() => {
+              this.run(service.setReceivePin(''));
+            })
+        }
+        // Buttons, not a Toggle: a Toggle fires its `onChange` when the first snapshot flips the
+        // bound value, which would pop this sheet at every launch.
+        Button(this.snap.receivePin.length > 0 ? '修改' : '设置')
+          .fontSize(13)
+          .onClick(() => {
+            this.pinEdit = this.snap.receivePin.length > 0 ? this.snap.receivePin : randomPin();
+            this.showPinSheet = true;
+          })
+      }
+      .width('100%')
+
+      Text(this.snap.receivePin.length > 0 ? `其他设备和浏览器上传前需要输入 PIN：${this.snap.receivePin}` : '')
+        .fontSize(10)
+        .fontColor('#B26A00')
+        .visibility(this.snap.receivePin.length > 0 ? Visibility.Visible : Visibility.None)
+        .width('100%')
 
       Row() {
         Text('加密传输 (HTTPS)')
@@ -365,17 +405,24 @@ struct Index {
 
   @Builder webShare() {
     Column({ space: 8 }) {
-      Row() {
-        Text('网页传')
-          .fontSize(14)
-          .fontWeight(FontWeight.Medium)
-          .layoutWeight(1)
-        Button(this.snap.webSharing ? '停止网页传' : '开始网页传')
+      Text('网页传')
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+
+      Row({ space: 8 }) {
+        Button(this.snap.webSharing && !this.snap.webUploading ? '停止网页传' : '网页传文件')
           .fontSize(13)
-          .backgroundColor(this.snap.webSharing ? '#C62828' : '#1565C0')
+          .backgroundColor(this.snap.webSharing && !this.snap.webUploading ? '#C62828' : '#1565C0')
           .fontColor(Color.White)
           .onClick(() => {
             this.run(service.toggleWebShare());
+          })
+        Button(this.snap.webUploading ? '停止网页收' : '网页收文件')
+          .fontSize(13)
+          .backgroundColor(this.snap.webUploading ? '#C62828' : '#1565C0')
+          .fontColor(Color.White)
+          .onClick(() => {
+            this.run(service.toggleWebUpload());
           })
       }
       .width('100%')
@@ -390,30 +437,42 @@ struct Index {
             .width('100%')
         }, (url: string) => url)
 
-        Text(`共 ${this.snap.webTotal} 字节 · 已送出 ${formatBytes(this.snap.webSent)} · `
-          + `已允许 ${this.snap.webClients} 台浏览器`)
-          .fontSize(11)
-          .fontColor('#777777')
-
-        ForEach(this.snap.webFiles, (item: FileRow) => {
-          Row() {
-            Text(item.name)
-              .fontSize(12)
-              .layoutWeight(1)
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-            Text(`${formatBytes(item.received)} / ${formatBytes(item.size)}`)
+        if (this.snap.webUploading) {
+          Text('同一网络的电脑浏览器打开下面的地址即可上传；收到的文件会像普通接收一样弹出确认')
+            .fontSize(11)
+            .fontColor('#777777')
+          if (this.snap.receivePin.length > 0) {
+            Text(`浏览器上传时需要输入 PIN：${this.snap.receivePin}`)
               .fontSize(11)
-              .fontColor('#777777')
-            Text(webStatusLabel(item.status))
-              .fontSize(11)
-              .fontColor(item.status === 'done' ? '#2E7D32' : '#777777')
+              .fontColor('#B26A00')
           }
-          .width('100%')
-        // As in the send rows: every value drawn here belongs in the key, or the row never updates.
-        }, (item: FileRow) => `${item.id}:${item.status}:${item.received}`)
+        } else {
+          Text(`共 ${this.snap.webTotal} 字节 · 已送出 ${formatBytes(this.snap.webSent)} · `
+            + `已允许 ${this.snap.webClients} 台浏览器`)
+            .fontSize(11)
+            .fontColor('#777777')
+
+          ForEach(this.snap.webFiles, (item: FileRow) => {
+            Row() {
+              Text(item.name)
+                .fontSize(12)
+                .layoutWeight(1)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+              Text(`${formatBytes(item.received)} / ${formatBytes(item.size)}`)
+                .fontSize(11)
+                .fontColor('#777777')
+              Text(webStatusLabel(item.status))
+                .fontSize(11)
+                .fontColor(item.status === 'done' ? '#2E7D32' : '#777777')
+            }
+            .width('100%')
+          // As in the send rows: every value drawn here belongs in the key, or the row never updates.
+          }, (item: FileRow) => `${item.id}:${item.status}:${item.received}`)
+        }
       } else {
-        Text('先在“发送文件”里选好文件，再开启网页传；同一网络的电脑浏览器打开下面的地址即可下载')
+        Text('“网页传文件”：先在“发送文件”里选好文件，再开启，浏览器打开地址即可下载；'
+          + '“网页收文件”：浏览器打开地址后把文件传上来')
           .fontSize(11)
           .fontColor('#999999')
       }
@@ -423,6 +482,57 @@ struct Index {
     .padding(12)
     .borderRadius(12)
     .backgroundColor('#F5F5F5')
+  }
+
+  @Builder pinSheet() {
+    Column() {
+      Column({ space: 10 }) {
+        Text('接收 PIN')
+          .fontSize(16)
+          .fontWeight(FontWeight.Bold)
+        Text('开启后，其他设备和浏览器上传前都必须输入这串数字')
+          .fontSize(12)
+          .fontColor('#666666')
+          .width('100%')
+        TextInput({ text: this.pinEdit, placeholder: '至少 4 位数字' })
+          .type(InputType.Number)
+          .maxLength(8)
+          .onChange((value: string) => {
+            this.pinEdit = value;
+          })
+        Row({ space: 12 }) {
+          Button('随机生成')
+            .fontSize(13)
+            .backgroundColor('#EEEEEE')
+            .fontColor('#333333')
+            .onClick(() => {
+              this.pinEdit = randomPin();
+            })
+          Blank()
+          Button('取消')
+            .fontSize(13)
+            .backgroundColor('#EEEEEE')
+            .fontColor('#333333')
+            .onClick(() => {
+              this.showPinSheet = false;
+            })
+          Button('确定')
+            .fontSize(13)
+            .onClick(() => {
+              this.confirmPin();
+            })
+        }
+        .width('100%')
+      }
+      .width('80%')
+      .padding(16)
+      .borderRadius(16)
+      .backgroundColor(Color.White)
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor('rgba(0,0,0,0.45)')
   }
 
   @Builder webSheet() {
@@ -531,6 +641,22 @@ struct Index {
     .alignItems(HorizontalAlign.Start)
   }
 
+  @Builder about() {
+    Column({ space: 3 }) {
+      Text('关于')
+        .fontSize(13)
+        .fontWeight(FontWeight.Medium)
+      Text('LocalSend-HarmonyNext 0.1.0 · LocalSend 协议 v2.2')
+        .fontSize(11)
+        .fontColor('#777777')
+      Text('与官方 LocalSend 客户端在局域网内直接互传文件，不经过任何服务器，也不收集任何数据。')
+        .fontSize(10)
+        .fontColor('#999999')
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
   @Builder offerSheet() {
     Column() {
       Column({ space: 10 }) {
@@ -626,6 +752,16 @@ struct Index {
       return;
     }
     service.startSend(this.target.fingerprint, this.pinDraft.trim());
+  }
+
+  private confirmPin(): void {
+    const pin: string = this.pinEdit.trim();
+    if (pin.length < 4) {
+      service.reportError('PIN 至少 4 位');
+      return;
+    }
+    this.showPinSheet = false;
+    this.run(service.setReceivePin(pin));
   }
 
   /**

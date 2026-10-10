@@ -501,11 +501,8 @@ export class SessionManager {
     if (required === null) {
       return null;
     }
-    if (exchange.peerCertFingerprint !== null) {
-      // Encrypted and mutually authenticated: the certificate already identified the peer, so
-      // a PIN would only guard against a threat the handshake settled.
-      return null;
-    }
+    // The reference checks the PIN on every prepare-upload, certificate or not: the PIN is the
+    // receiver's own gate, and an authenticated transport must not silently waive it.
     const provided: string | undefined = exchange.request.query.get('pin');
     const result: PinResult = this.pinGuard.check(required, provided === undefined ? null : provided,
       exchange.peerHost);
