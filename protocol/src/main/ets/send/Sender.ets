@@ -12,6 +12,7 @@ import {
 import { Status } from '../httpx/Http';
 import { Sha256, hexLower } from '../util/Digest';
 import { describeFailure, describePlatformError } from '../util/Errors';
+import { UriStat, statUri } from '../util/FileStat';
 import { mimeTypeOf } from './MimeTypes';
 import {
   SendFile, SendFileStatus, SendSource, SendTarget, SendTask, SendTaskStatus
@@ -148,25 +149,14 @@ export class Sender {
   private async statAll(task: SendTask, sources: SendSource[]): Promise<void> {
     for (let i = 0; i < sources.length; i++) {
       const source: SendSource = sources[i];
-      let size: number = 0;
-      let modifiedMs: number = 0;
       try {
-        const file: fileIo.File = await fileIo.open(source.uri, fileIo.OpenMode.READ_ONLY);
-        try {
-          const stat: fileIo.Stat = fileIo.statSync(file.fd);
-          size = stat.size;
-          // `mtime` is seconds since the Epoch; the wire wants an ISO-8601 string.
-          modifiedMs = stat.mtime > 0 ? stat.mtime * 1000 : 0;
-        } finally {
-          await fileIo.close(file);
-        }
+        const info: UriStat = await statUri(source.uri);
+        const entry: SendFile = new SendFile(`f${task.files.length + 1}`, source.uri, source.fileName,
+          mimeTypeOf(source.fileName), info.size, info.modifiedMs);
+        task.files.push(entry);
       } catch (e) {
         this.log(`跳过读不到的文件 ${source.fileName}: ${describePlatformError(e as Object, 'open')}`);
-        continue;
       }
-      const entry: SendFile = new SendFile(`f${task.files.length + 1}`, source.uri, source.fileName,
-        mimeTypeOf(source.fileName), size, modifiedMs);
-      task.files.push(entry);
     }
   }
 

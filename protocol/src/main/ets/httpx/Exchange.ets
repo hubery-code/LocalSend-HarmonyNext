@@ -1,7 +1,7 @@
 import { util } from '@kit.ArkTS';
 import { ByteLink } from '../transport/ByteLink';
 import { concatBytes } from '../util/ByteBuffers';
-import { BodyFraming, HttpRequestHead, Status } from './Http';
+import { BodyFraming, HttpRequestHead } from './Http';
 import { BodyDecoder, ByteQueue } from './Framing';
 
 /**
@@ -188,10 +188,23 @@ export function replyWithHtml(status: number, html: string): ServerReply {
   return { status: status, headers: headers, body: body, stream: null, contentLength: body.length };
 }
 
-export function replyWithStream(contentType: string, length: number, producer: (sink: ChunkSink) => Promise<void>): ServerReply {
+/**
+ * Streams a body whose size is known up front.
+ *
+ * The download endpoint uses this so the browser gets Content-Length rather than chunked framing:
+ * a truncation must be visible as a short body, not hidden inside a well-formed chunk stream.
+ * `extra` carries endpoint-specific headers such as Content-Disposition.
+ */
+export function replyWithStream(status: number, contentType: string, length: number,
+  extra: Map<string, string> | null, producer: (sink: ChunkSink) => Promise<void>): ServerReply {
   const headers: Map<string, string> = new Map<string, string>();
   headers.set('content-type', contentType);
-  return { status: Status.Ok, headers: headers, body: null, stream: producer, contentLength: length };
+  if (extra !== null) {
+    extra.forEach((value: string, key: string) => {
+      headers.set(key, value);
+    });
+  }
+  return { status: status, headers: headers, body: null, stream: producer, contentLength: length };
 }
 
 const utf8Decoder: util.TextDecoder = util.TextDecoder.create('utf-8');

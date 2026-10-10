@@ -59,6 +59,17 @@ function taskStatusLabel(status: string): string {
   return sendStatusLabel(status);
 }
 
+/** The web rows count bytes out, so they need their own three words. */
+function webStatusLabel(status: string): string {
+  if (status === 'done') {
+    return '已下载';
+  }
+  if (status === 'partial') {
+    return '下载中';
+  }
+  return '未下载';
+}
+
 @Entry
 @Component
 struct Index {
@@ -93,6 +104,7 @@ struct Index {
           this.controls()
           this.peers()
           this.send()
+          this.webShare()
           this.transfer()
           this.console()
         }
@@ -105,6 +117,8 @@ struct Index {
 
       if (this.snap.hasOffer) {
         this.offerSheet()
+      } else if (this.snap.hasWebOffer) {
+        this.webSheet()
       }
     }
     .width('100%')
@@ -347,6 +361,114 @@ struct Index {
     .padding(12)
     .borderRadius(12)
     .backgroundColor('#F5F5F5')
+  }
+
+  @Builder webShare() {
+    Column({ space: 8 }) {
+      Row() {
+        Text('网页传')
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .layoutWeight(1)
+        Button(this.snap.webSharing ? '停止网页传' : '开始网页传')
+          .fontSize(13)
+          .backgroundColor(this.snap.webSharing ? '#C62828' : '#1565C0')
+          .fontColor(Color.White)
+          .onClick(() => {
+            this.run(service.toggleWebShare());
+          })
+      }
+      .width('100%')
+
+      if (this.snap.webSharing) {
+        ForEach(this.snap.webUrls, (url: string) => {
+          Text(url)
+            .fontSize(12)
+            .fontFamily('monospace')
+            .fontColor('#1565C0')
+            .copyOption(CopyOptions.LocalDevice)
+            .width('100%')
+        }, (url: string) => url)
+
+        Text(`共 ${this.snap.webTotal} 字节 · 已送出 ${formatBytes(this.snap.webSent)} · `
+          + `已允许 ${this.snap.webClients} 台浏览器`)
+          .fontSize(11)
+          .fontColor('#777777')
+
+        ForEach(this.snap.webFiles, (item: FileRow) => {
+          Row() {
+            Text(item.name)
+              .fontSize(12)
+              .layoutWeight(1)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            Text(`${formatBytes(item.received)} / ${formatBytes(item.size)}`)
+              .fontSize(11)
+              .fontColor('#777777')
+            Text(webStatusLabel(item.status))
+              .fontSize(11)
+              .fontColor(item.status === 'done' ? '#2E7D32' : '#777777')
+          }
+          .width('100%')
+        // As in the send rows: every value drawn here belongs in the key, or the row never updates.
+        }, (item: FileRow) => `${item.id}:${item.status}:${item.received}`)
+      } else {
+        Text('先在“发送文件”里选好文件，再开启网页传；同一网络的电脑浏览器打开下面的地址即可下载')
+          .fontSize(11)
+          .fontColor('#999999')
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding(12)
+    .borderRadius(12)
+    .backgroundColor('#F5F5F5')
+  }
+
+  @Builder webSheet() {
+    Column() {
+      Column({ space: 10 }) {
+        Text('有浏览器想下载分享的文件')
+          .fontSize(16)
+          .fontWeight(FontWeight.Bold)
+        Text(`来源 ${this.snap.webOfferClient}`)
+          .fontSize(13)
+          .fontColor('#666666')
+        Text(`${this.snap.webOfferFiles} 个文件 · ${formatBytes(this.snap.webOfferBytes)}`)
+          .fontSize(13)
+          .fontColor('#666666')
+        if (this.snap.webOfferAgent.length > 0) {
+          Text(this.snap.webOfferAgent)
+            .fontSize(10)
+            .fontColor('#999999')
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+
+        Row({ space: 12 }) {
+          Button('拒绝')
+            .backgroundColor('#EEEEEE')
+            .fontColor('#333333')
+            .onClick(() => {
+              service.denyWebVisitor();
+            })
+          Button('允许')
+            .onClick(() => {
+              service.allowWebVisitor();
+            })
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.End)
+      }
+      .width('80%')
+      .padding(16)
+      .borderRadius(16)
+      .backgroundColor(Color.White)
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor('rgba(0,0,0,0.45)')
   }
 
   @Builder transfer() {

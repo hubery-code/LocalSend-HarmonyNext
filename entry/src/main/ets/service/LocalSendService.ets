@@ -3,10 +3,11 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 
 import {
   ApiPath, ClientCredentials, DEFAULT_PORT, DestinationContext, DeviceTypeValue, Discovery,
-  FileProgressEvent, FileStatus, HttpServer, Identity, IdentityRepository, KnownChannel, PrepareContext,
-  PrepareDecision, PROTOCOL_VERSION, Peer, ProtocolScheme, ReceivedFile, ReceiveSession, RequestHandler,
-  SendFile, SendFileStatus, SendSource, SendTarget, SendTask, SendTaskStatus, Sender, SenderConfig,
-  SessionEndReason, SessionManager, SessionManagerConfig, TlsMaterial, WireDeviceInfo
+  FileProgressEvent, FileStatus, HttpServer, Identity, IdentityRepository, KnownChannel, LocalInterface,
+  PrepareContext, PrepareDecision, PROTOCOL_VERSION, Peer, ProtocolScheme, ReceivedFile, ReceiveSession,
+  RequestHandler, SendFile, SendFileStatus, SendSource, SendTarget, SendTask, SendTaskStatus, Sender,
+  SenderConfig, SessionEndReason, SessionManager, SessionManagerConfig, TlsMaterial, WireDeviceInfo,
+  WebOfferContext, WebOfferFile, WebShare, WebShareConfig
 } from '@lsnext/protocol';
 import { AppPrefs } from './AppPrefs';
 import { formatHostSpec, parseHostSpec, sameHost } from './HostSpec';
@@ -59,6 +60,18 @@ export class ServiceSnapshot {
   sendTotal: number = 0;
   sendSent: number = 0;
   sendError: string = '';
+  /** The web share (Download API): what is offered, where to open it, and who got in. */
+  webSharing: boolean = false;
+  webFiles: FileRow[] = [];
+  webTotal: number = 0;
+  webSent: number = 0;
+  webClients: number = 0;
+  webUrls: string[] = [];
+  hasWebOffer: boolean = false;
+  webOfferClient: string = '';
+  webOfferAgent: string = '';
+  webOfferFiles: number = 0;
+  webOfferBytes: number = 0;
   log: string[] = [];
 }
 
@@ -91,6 +104,10 @@ export class LocalSendService {
   private known: KnownChannel[] = [];
   private sender: Sender | null = null;
   private pickedUris: string[] = [];
+  private web: WebShare | null = null;
+  /** Set while a browser's download request is on screen. */
+  private webOffer: WebOfferContext | null = null;
+  private resolveWebOffer: ((accepted: boolean) => void) | null = null;
 
   /** Called by the page in aboutToAppear; the service never holds a UI object. */
   attach(listener: (snapshot: ServiceSnapshot) => void): void {
@@ -190,9 +207,16 @@ export class LocalSendService {
     });
     this.discovery = discovery;
 
+    this.web = new WebShare(this.webConfig(identity));
+
     const routes: Map<string, RequestHandler> = sessions.routes();
     routes.set(ApiPath.REGISTER, discovery.registerHandler());
     routes.set(ApiPath.INFO, discovery.infoHandler());
+    // The web surface is live as soon as the server is: an off share must answer its pages with 403
+    // rather than let requests fall through as unknown paths.
+    this.web.routes().forEach((handler: RequestHandler, path: string) => {
+      routes.set(path, handler);
+    });
 
     const tls: TlsMaterial | null = identity.isHttps
       ? {
@@ -235,9 +259,15 @@ export class LocalSendService {
       this.sessions.reset();
       this.sessions = null;
     }
+    if (this.web !== null) {
+      this.web.reset();
+      this.web = null;
+    }
     this.resolveOffer = null;
     this.offer = null;
     this.session = null;
+    this.webOffer = null;
+    this.resolveWebOffer = null;
     this.running = false;
     this.emit();
   }
@@ -434,6 +464,151 @@ export class LocalSendService {
     return '';
   }
 
+  // ------------------------------------------------------------ web share (Download API)
+
+  /** One switch for the page: a running share stops, anything else starts one from the picks. */
+  async toggleWebShare(): Promise<void> {
+    if (this.web !== null && this.web.isSharing()) {
+      this.stopWebShare();
+      return;
+    }
+    await this.startWebShare();
+  }
+
+  /**
+   * Offers the staged selection to browsers.
+   *
+   * A share is only meaningful while the server listens, so starting one from a stopped app turns
+   * receiving on first rather than making the user flip two switches in a row.
+   */
+  async startWebShare(): Promise<void> {
+    if (this.pickedUris.length === 0) {
+      this.reportError('还没有选择文件');
+      return;
+    }
+    if (!this.running) {
+      await this.setReceiving(true);
+    }
+    const web: WebShare | null = this.web;
+    if (web === null) {
+      this.reportError('接收未能开启，无法网页分享');
+      return;
+    }
+    const sources: SendSource[] = [];
+    for (let i = 0; i < this.pickedUris.length; i++) {
+      sources.push({ uri: this.pickedUris[i], fileName: displayNameOf(this.pickedUris[i]) });
+    }
+    const count: number = await web.share(sources);
+    if (count === 0) {
+      this.reportError('选中的文件都读取不到');
+      return;
+    }
+    // Peers cache our announcement, so the new download flag only reaches them once we re-announce.
+    if (this.discovery !== null) {
+      this.discovery.announce();
+    }
+    this.emit();
+  }
+
+  stopWebShare(): void {
+    const web: WebShare | null = this.web;
+    if (web !== null) {
+      web.stop();
+    }
+    this.emit();
+  }
+
+  private webConfig(identity: Identity): WebShareConfig {
+    const config: WebShareConfig = {
+      self: (): WireDeviceInfo => this.selfInfo(identity),
+      // A share PIN belongs with the settings screen; until then the confirmation dialog is the gate.
+      pin: (): string | null => null,
+      decide: (context: WebOfferContext): Promise<boolean> => this.askWebVisitor(context),
+      // A browser that hangs up leaves the sheet standing over a request nobody can serve anymore.
+      onOfferClosed: (clientIp: string): void => {
+        const pending: WebOfferContext | null = this.webOffer;
+        if (pending !== null && pending.clientIp === clientIp) {
+          this.webOffer = null;
+          this.resolveWebOffer = null;
+          this.emit();
+        }
+      },
+      onChanged: (): void => this.emit(),
+      log: (message: string): void => this.log(message)
+    };
+    return config;
+  }
+
+  private askWebVisitor(context: WebOfferContext): Promise<boolean> {
+    this.webOffer = context;
+    this.emit();
+    return new Promise<boolean>((resolve: (value: boolean) => void) => {
+      this.resolveWebOffer = resolve;
+    });
+  }
+
+  allowWebVisitor(): void {
+    this.answerWebOffer(true);
+  }
+
+  denyWebVisitor(): void {
+    this.answerWebOffer(false);
+  }
+
+  /** The browser may already have hung up; resolving anyway is harmless and frees the waiting slot. */
+  private answerWebOffer(accepted: boolean): void {
+    const resolve: ((accepted: boolean) => void) | null = this.resolveWebOffer;
+    if (resolve === null) {
+      return;
+    }
+    this.resolveWebOffer = null;
+    this.webOffer = null;
+    resolve(accepted);
+    this.emit();
+  }
+
+  private webRows(): FileRow[] {
+    const rows: FileRow[] = [];
+    const web: WebShare | null = this.web;
+    if (web === null) {
+      return rows;
+    }
+    const files: WebOfferFile[] = web.offered();
+    for (let i = 0; i < files.length; i++) {
+      const file: WebOfferFile = files[i];
+      const row: FileRow = new FileRow();
+      row.id = file.fileId;
+      row.name = file.fileName;
+      row.size = file.size;
+      row.received = file.downloaded;
+      if (file.size > 0 && file.downloaded >= file.size) {
+        row.status = 'done';
+      } else if (file.downloaded > 0) {
+        row.status = 'partial';
+      } else {
+        row.status = 'idle';
+      }
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  /** Where a browser on the same network opens the share: one address per live interface. */
+  private webLinks(): string[] {
+    const links: string[] = [];
+    const discovery: Discovery | null = this.discovery;
+    if (discovery === null) {
+      return links;
+    }
+    const scheme: string = this.identity === null || !this.identity.isHttps
+      ? ProtocolScheme.HTTP : ProtocolScheme.HTTPS;
+    const interfaces: LocalInterface[] = discovery.localInterfaces();
+    for (let i = 0; i < interfaces.length; i++) {
+      links.push(`${scheme}://${interfaces[i].address}:${DEFAULT_PORT}/`);
+    }
+    return links;
+  }
+
   // ------------------------------------------------------------- user answers
 
   acceptOffer(fileIds: string[]): void {
@@ -476,8 +651,8 @@ export class LocalSendService {
       fingerprint: identity.fingerprint,
       port: DEFAULT_PORT,
       protocol: identity.isHttps ? ProtocolScheme.HTTPS : ProtocolScheme.HTTP,
-      // The web download page is a later milestone; advertising it would invite requests we refuse.
-      download: false
+      // `download` means "the browser download page is live", and only a running share is that.
+      download: this.web !== null && this.web.isSharing()
     };
     return info;
   }
@@ -640,6 +815,19 @@ export class LocalSendService {
     snapshot.sendTotal = sendTask === null ? 0 : sendTask.totalBytes();
     snapshot.sendSent = sendTask === null ? 0 : sendTask.sentBytes();
     snapshot.sendError = this.sendErrorText();
+    const web: WebShare | null = this.web;
+    const webOffer: WebOfferContext | null = this.webOffer;
+    snapshot.webSharing = web !== null && web.isSharing();
+    snapshot.webFiles = this.webRows();
+    snapshot.webTotal = web === null ? 0 : web.totalOffered();
+    snapshot.webSent = web === null ? 0 : web.transferred();
+    snapshot.webClients = web === null ? 0 : web.acceptedClients();
+    snapshot.webUrls = this.webLinks();
+    snapshot.hasWebOffer = webOffer !== null;
+    snapshot.webOfferClient = webOffer === null ? '' : webOffer.clientIp;
+    snapshot.webOfferAgent = webOffer === null ? '' : webOffer.userAgent;
+    snapshot.webOfferFiles = webOffer === null ? 0 : webOffer.fileCount;
+    snapshot.webOfferBytes = webOffer === null ? 0 : webOffer.totalBytes;
     snapshot.log = this.logLines.slice(0);
     listener(snapshot);
   }

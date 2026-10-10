@@ -105,6 +105,22 @@ export class Dto {
     return writer.build();
   }
 
+  /**
+   * The `/register`, `/info` and `prepare-download` answer built from our own announcement: the same
+   * identity without the dialling information, which a peer already knows by having reached us.
+   */
+  static infoResponseOf(info: WireDeviceInfo): WireInfoResponse {
+    const response: WireInfoResponse = {
+      alias: info.alias,
+      version: info.version,
+      fingerprint: info.fingerprint,
+      download: info.download,
+      deviceModel: info.deviceModel,
+      deviceType: info.deviceType === undefined ? DeviceTypeValue.DESKTOP : info.deviceType
+    };
+    return response;
+  }
+
   static fileToJson(file: WireFile): JsonWriter {
     const writer: JsonWriter = new JsonWriter();
     writer.putString('id', file.id);

@@ -8,4 +8,5 @@ export * from './FileName';
 export * from './PathSafety';
 export * from './Digest';
 export * from './ByteBuffers';
+export * from './FileStat';
 export * from './NetIF';

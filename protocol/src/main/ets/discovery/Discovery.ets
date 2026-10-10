@@ -257,16 +257,7 @@ export class Discovery {
   }
 
   private infoResponse(): WireInfoResponse {
-    const self: WireDeviceInfo = this.config.self();
-    const response: WireInfoResponse = {
-      alias: self.alias,
-      version: self.version,
-      fingerprint: self.fingerprint,
-      download: self.download,
-      deviceModel: self.deviceModel,
-      deviceType: self.deviceType ?? DeviceTypeValue.DESKTOP
-    };
-    return response;
+    return Dto.infoResponseOf(this.config.self());
   }
 
   private probeOptions(timeoutMs: number): ProbeOptions {

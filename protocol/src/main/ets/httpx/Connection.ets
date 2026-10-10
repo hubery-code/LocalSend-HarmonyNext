@@ -106,6 +106,15 @@ export class HttpConnection {
 
   private armIdleTimer(): void {
     this.clearIdleTimer();
+    if (this.closed) {
+      return;
+    }
+    if (this.phase === Phase.HANDLING && (this.body === null || this.body.isFinished())) {
+      // Nothing more can arrive on this socket while the handler works, and a handler may work for as
+      // long as the user takes over a confirmation dialog. Silence here does not mean the peer is gone
+      // — that case reports itself through `onSocketClosed` — so the idle clock stays off.
+      return;
+    }
     this.idleTimer = setTimeout(() => {
       this.close('idle timeout');
     }, IDLE_TIMEOUT_MS);
@@ -170,6 +179,9 @@ export class HttpConnection {
         return;
       }
       this.phase = Phase.HANDLING;
+      // The clock that was armed while the head arrived must be re-decided now: a handler that has
+      // nothing left to read can take as long as the user needs, and a stale timer would cut it off.
+      this.armIdleTimer();
       await this.handle(request, body);
       if (this.closed) {
         return;
@@ -178,6 +190,8 @@ export class HttpConnection {
       this.head.clear();
       this.body = null;
       this.phase = Phase.HEAD;
+      // The handler is over, so the connection is genuinely idle now and the clock starts again.
+      this.armIdleTimer();
     }
   }
 
@@ -232,11 +246,17 @@ export class HttpConnection {
       if (sendBody && reply.body !== null && reply.body.length > 0) {
         await this.link.send(reply.body);
       }
-      if (sendBody && reply.stream !== null) {
-        await reply.stream(new ChunkSink(this.link));
-      }
     } catch (e) {
       this.close(`write failed: ${describeFailure(e)}`);
+    }
+    if (sendBody && reply.stream !== null) {
+      // Run even after a failed head write: a producer that holds a file open must reach its own
+      // cleanup, and the first write to the closed link is what releases it.
+      try {
+        await reply.stream(new ChunkSink(this.link));
+      } catch (e) {
+        this.close(`stream write failed: ${describeFailure(e)}`);
+      }
     }
     if (!keepAlive) {
       this.close('response complete, closing');
