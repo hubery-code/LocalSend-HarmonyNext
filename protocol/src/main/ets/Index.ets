@@ -16,3 +16,8 @@ export * from './httpx/Exchange';
 export * from './httpx/Connection';
 export * from './httpx/Server';
 export * from './httpx/Client';
+export * from './discovery/Peer';
+export * from './discovery/Multicast';
+export * from './discovery/Probing';
+export * from './discovery/Discovery';
+export * from './session/Index';

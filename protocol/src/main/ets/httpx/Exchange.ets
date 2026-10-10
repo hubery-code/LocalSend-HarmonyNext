@@ -1,5 +1,6 @@
 import { util } from '@kit.ArkTS';
 import { ByteLink } from '../transport/ByteLink';
+import { concatBytes } from '../util/ByteBuffers';
 import { BodyFraming, HttpRequestHead, Status } from './Http';
 import { BodyDecoder, ByteQueue } from './Framing';
 
@@ -85,6 +86,34 @@ export class BodySource {
 
   isFinished(): boolean {
     return this.decoder.isFinished();
+  }
+
+  /**
+   * The whole body, or null when it is missing, malformed or larger than `maxBytes`.
+   *
+   * A single `read` hands back whatever has arrived so far, so a caller that wants the complete
+   * message — which is every JSON endpoint — must keep reading until the framing says it is done.
+   */
+  async readAll(maxBytes: number): Promise<Uint8Array | null> {
+    const parts: Uint8Array[] = [];
+    let total: number = 0;
+    for (;;) {
+      let chunk: Uint8Array | null;
+      try {
+        chunk = await this.read(64 * 1024);
+      } catch (e) {
+        return null;
+      }
+      if (chunk === null) {
+        break;
+      }
+      parts.push(chunk);
+      total += chunk.length;
+      if (total > maxBytes) {
+        return null;
+      }
+    }
+    return total === 0 ? null : concatBytes(parts);
   }
 }
 
