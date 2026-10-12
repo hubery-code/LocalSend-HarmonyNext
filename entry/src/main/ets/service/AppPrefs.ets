@@ -13,6 +13,15 @@ const KEY_ENCRYPTION: string = 'encryption';
 const KEY_RECEIVING: string = 'receiving';
 const KEY_KNOWN_HOSTS: string = 'knownHosts';
 const KEY_RECEIVE_PIN: string = 'receivePin';
+const KEY_WEB_AUTO_ACCEPT: string = 'webAutoAccept';
+const KEY_QUICK_SAVE: string = 'quickSave';
+const KEY_FAVORITES: string = 'favorites';
+const KEY_HISTORY: string = 'history';
+const KEY_THEME: string = 'themeMode';
+const KEY_ANIMATIONS: string = 'animations';
+const KEY_AUTO_FINISH: string = 'autoFinish';
+const KEY_SAVE_TO_HISTORY: string = 'saveToHistory';
+const KEY_ADVANCED: string = 'advancedSettings';
 
 /**
  * The app's settings and the device identity, in one preferences file.
@@ -117,6 +126,93 @@ export class AppPrefs implements IdentityStore {
 
   async setReceivePin(pin: string | null): Promise<void> {
     this.prefs.putSync(KEY_RECEIVE_PIN, pin === null ? '' : pin);
+    await this.prefs.flush();
+  }
+
+  /** 'off' | 'paired' | 'on', the three states of the receive page's quick-save control. */
+  quickSave(): string {
+    return this.prefs.getSync(KEY_QUICK_SAVE, 'off') as string;
+  }
+
+  async setQuickSave(mode: string): Promise<void> {
+    this.prefs.putSync(KEY_QUICK_SAVE, mode);
+    await this.prefs.flush();
+  }
+
+  /** The favorites list as JSON; parsing lives in the service so this stays a dumb store. */
+  favoritesJson(): string {
+    return this.prefs.getSync(KEY_FAVORITES, '') as string;
+  }
+
+  async setFavoritesJson(json: string): Promise<void> {
+    this.prefs.putSync(KEY_FAVORITES, json);
+    await this.prefs.flush();
+  }
+
+  /** Receive history as JSON, newest first. */
+  historyJson(): string {
+    return this.prefs.getSync(KEY_HISTORY, '') as string;
+  }
+
+  async setHistoryJson(json: string): Promise<void> {
+    this.prefs.putSync(KEY_HISTORY, json);
+    await this.prefs.flush();
+  }
+
+  /** 'system' | 'light' | 'dark'. */
+  themeMode(): string {
+    return this.prefs.getSync(KEY_THEME, 'system') as string;
+  }
+
+  async setThemeMode(mode: string): Promise<void> {
+    this.prefs.putSync(KEY_THEME, mode);
+    await this.prefs.flush();
+  }
+
+  animations(): boolean {
+    return this.prefs.getSync(KEY_ANIMATIONS, true) as boolean;
+  }
+
+  async setAnimations(enabled: boolean): Promise<void> {
+    this.prefs.putSync(KEY_ANIMATIONS, enabled);
+    await this.prefs.flush();
+  }
+
+  /** On: the finished transfer vanishes once done. Off: it stays with a 完成 button. */
+  autoFinish(): boolean {
+    return this.prefs.getSync(KEY_AUTO_FINISH, true) as boolean;
+  }
+
+  async setAutoFinish(enabled: boolean): Promise<void> {
+    this.prefs.putSync(KEY_AUTO_FINISH, enabled);
+    await this.prefs.flush();
+  }
+
+  saveToHistory(): boolean {
+    return this.prefs.getSync(KEY_SAVE_TO_HISTORY, true) as boolean;
+  }
+
+  async setSaveToHistory(enabled: boolean): Promise<void> {
+    this.prefs.putSync(KEY_SAVE_TO_HISTORY, enabled);
+    await this.prefs.flush();
+  }
+
+  advanced(): boolean {
+    return this.prefs.getSync(KEY_ADVANCED, false) as boolean;
+  }
+
+  async setAdvanced(enabled: boolean): Promise<void> {
+    this.prefs.putSync(KEY_ADVANCED, enabled);
+    await this.prefs.flush();
+  }
+
+  /** On: a browser hitting the download page is served without the per-request dialog. */
+  webAutoAccept(): boolean {
+    return this.prefs.getSync(KEY_WEB_AUTO_ACCEPT, false) as boolean;
+  }
+
+  async setWebAutoAccept(enabled: boolean): Promise<void> {
+    this.prefs.putSync(KEY_WEB_AUTO_ACCEPT, enabled);
     await this.prefs.flush();
   }
 }

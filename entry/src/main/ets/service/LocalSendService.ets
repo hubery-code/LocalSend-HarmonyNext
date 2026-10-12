@@ -1,4 +1,4 @@
-import { common, wantAgent, WantAgent } from '@kit.AbilityKit';
+import { common, ConfigurationConstant, wantConstant, Want, wantAgent, WantAgent } from '@kit.AbilityKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
 import { fileIo as fs, fileUri, picker } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
@@ -25,6 +25,9 @@ export class PeerRow {
   scheme: string = 'http';
   download: boolean = false;
   fingerprint: string = '';
+  /** Shown under the name on the send tab; empty while discovery has not enriched the peer. */
+  model: string = '';
+  deviceType: string = '';
 }
 
 export class FileRow {
@@ -37,11 +40,35 @@ export class FileRow {
   status: string = '';
 }
 
+/** What a system save picker needs; a just-received row and a history line both provide it. */
+export interface SaveTarget {
+  name: string;
+  fileType: string;
+  path: string;
+}
+
 /** A file of the last finished session, with what a save target needs to take it from the sandbox. */
-export class ReceivedRow extends FileRow {
+export class ReceivedRow extends FileRow implements SaveTarget {
   path: string = '';
   fileType: string = '';
   saved: boolean = false;
+}
+
+/** A device the user starred; manual entries have no fingerprint and never quick-save. */
+export interface FavoriteRow {
+  name: string;
+  host: string;
+  port: number;
+  fingerprint: string;
+}
+
+/** One line of the persistent receive history. */
+export interface HistoryRow extends SaveTarget {
+  id: string;
+  size: number;
+  sender: string;
+  timeMs: number;
+  saved: boolean;
 }
 
 export class ServiceSnapshot {
@@ -90,6 +117,33 @@ export class ServiceSnapshot {
   /** The receive PIN, or empty while senders need none. */
   receivePin: string = '';
   log: string[] = [];
+  /** 'off' | 'paired' | 'on' — the receive page's quick-save control. */
+  quickSave: string = 'off';
+  favorites: FavoriteRow[] = [];
+  /** Persistent receive history, newest first. */
+  history: HistoryRow[] = [];
+  /** 'system' | 'light' | 'dark'. */
+  themeMode: string = 'system';
+  animations: boolean = true;
+  /** On: a finished transfer disappears by itself. Off: it waits for 完成. */
+  autoFinish: boolean = true;
+  saveToHistory: boolean = true;
+  advanced: boolean = false;
+  /** On: browsers downloading the shared files are let in without a per-request dialog. */
+  webAutoAccept: boolean = false;
+  /** Every local IPv4 address; the receive page derives the official '#<last octet>' from them. */
+  localIps: string[] = [];
+  /** The finished session kept on screen while autoFinish is off. */
+  hasFinished: boolean = false;
+  finishedSender: string = '';
+  finishedFiles: FileRow[] = [];
+}
+
+/** A staged pick, with the metadata the UI shows before any hashing has happened. */
+class PickedItem {
+  uri: string = '';
+  name: string = '';
+  size: number = 0;
 }
 
 /** The directory files land in, decided once per app run. */
@@ -131,11 +185,22 @@ export class LocalSendService {
   private encryption: boolean = false;
   private known: KnownChannel[] = [];
   private sender: Sender | null = null;
-  private pickedUris: string[] = [];
+  private picked: PickedItem[] = [];
   private web: WebShare | null = null;
   /** Set while a browser's download request is on screen. */
   private webOffer: WebOfferContext | null = null;
   private resolveWebOffer: ((accepted: boolean) => void) | null = null;
+  private quickSaveMode: string = 'off';
+  private favs: FavoriteRow[] = [];
+  private historyEntries: HistoryRow[] = [];
+  private themeModeValue: string = 'system';
+  private animationsValue: boolean = true;
+  private autoFinishValue: boolean = true;
+  private saveToHistoryValue: boolean = true;
+  private advancedValue: boolean = false;
+  private webAutoAcceptValue: boolean = false;
+  private finishedRows: FileRow[] = [];
+  private finishedSender: string = '';
 
   /** Called by the page in aboutToAppear; the service never holds a UI object. */
   attach(listener: (snapshot: ServiceSnapshot) => void): void {
@@ -153,6 +218,16 @@ export class LocalSendService {
     this.aliasText = this.prefs.alias();
     this.encryption = this.prefs.encryption();
     this.known = this.readKnown();
+    this.quickSaveMode = this.prefs.quickSave();
+    this.favs = this.readFavorites();
+    this.historyEntries = this.readHistory();
+    this.themeModeValue = this.prefs.themeMode();
+    this.animationsValue = this.prefs.animations();
+    this.autoFinishValue = this.prefs.autoFinish();
+    this.saveToHistoryValue = this.prefs.saveToHistory();
+    this.advancedValue = this.prefs.advanced();
+    this.webAutoAcceptValue = this.prefs.webAutoAccept();
+    this.applyColorMode();
     // Resolve the identity now so the UI can show a fingerprint before the server runs.
     this.identity = await new IdentityRepository(this.prefs).resolve(this.encryption, '');
     if (this.prefs.receiving()) {
@@ -161,12 +236,13 @@ export class LocalSendService {
     this.emit();
   }
 
+  /** An empty alias means "use the system name"; prefs resolves the fallback. */
   async setAlias(alias: string): Promise<void> {
     if (this.prefs === null) {
       return;
     }
     await this.prefs.setAlias(alias);
-    this.aliasText = alias;
+    this.aliasText = this.prefs.alias();
     this.emit();
   }
 
@@ -331,6 +407,363 @@ export class LocalSendService {
     this.emit();
   }
 
+  // ------------------------------------------------------------------ quick save
+
+  /** 'off' | 'paired' (favorites only) | 'on'. */
+  quickSave(): string {
+    return this.quickSaveMode;
+  }
+
+  async setQuickSave(mode: string): Promise<void> {
+    if (this.prefs === null || this.quickSaveMode === mode) {
+      return;
+    }
+    this.quickSaveMode = mode;
+    await this.prefs.setQuickSave(mode);
+    if (mode === 'on') {
+      this.log('自动保存已开启：将自动接受所有传输请求');
+    } else if (mode === 'paired') {
+      this.log('自动保存已开启（仅收藏夹）');
+    } else {
+      this.log('自动保存已关闭');
+    }
+    this.emit();
+  }
+
+  // ------------------------------------------------------------------- favorites
+
+  favorites(): FavoriteRow[] {
+    return this.favs.slice(0);
+  }
+
+  isFavorite(fingerprint: string): boolean {
+    if (fingerprint.length === 0) {
+      return false;
+    }
+    for (let i = 0; i < this.favs.length; i++) {
+      if (this.favs[i].fingerprint === fingerprint) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** The star on a discovered device: adds, or removes when already starred. */
+  async toggleFavorite(peer: PeerRow): Promise<void> {
+    if (this.isFavorite(peer.fingerprint)) {
+      await this.removeFavorite(peer.fingerprint);
+      return;
+    }
+    const entry: FavoriteRow = {
+      name: peer.name,
+      host: peer.host,
+      port: peer.port,
+      fingerprint: peer.fingerprint
+    };
+    this.upsertFavorite(entry);
+    await this.persistFavorites();
+    this.log(`已收藏：${peer.name}`);
+    this.emit();
+  }
+
+  /** A favorite typed in by hand: no fingerprint, so it is never part of quick save. */
+  async addFavoriteManual(name: string, host: string, port: number): Promise<void> {
+    if (name.length === 0 || host.length === 0 || port <= 0 || port > 65535) {
+      this.reportError('请填写名称、IP 和端口');
+      return;
+    }
+    const entry: FavoriteRow = { name: name, host: host, port: port, fingerprint: '' };
+    this.upsertFavorite(entry);
+    await this.persistFavorites();
+    this.log(`已添加收藏：${name}`);
+    this.emit();
+  }
+
+  /** Removal is keyed by fingerprint, or `host:port` for manual entries. */
+  async removeFavorite(key: string): Promise<void> {
+    const kept: FavoriteRow[] = [];
+    for (let i = 0; i < this.favs.length; i++) {
+      if (favoriteKey(this.favs[i]) !== key) {
+        kept.push(this.favs[i]);
+      }
+    }
+    this.favs = kept;
+    await this.persistFavorites();
+    this.log('已移除收藏');
+    this.emit();
+  }
+
+  private upsertFavorite(entry: FavoriteRow): void {
+    const key: string = favoriteKey(entry);
+    for (let i = 0; i < this.favs.length; i++) {
+      if (favoriteKey(this.favs[i]) === key) {
+        this.favs[i] = entry;
+        return;
+      }
+    }
+    this.favs.push(entry);
+  }
+
+  private readFavorites(): FavoriteRow[] {
+    const json: string = this.prefs === null ? '' : this.prefs.favoritesJson();
+    if (json.length === 0) {
+      return [];
+    }
+    try {
+      const parsed: FavoriteRow[] = JSON.parse(json) as FavoriteRow[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      this.log(`收藏夹读取失败: ${describeFailure(e)}`);
+      return [];
+    }
+  }
+
+  private persistFavorites(): Promise<void> {
+    if (this.prefs === null) {
+      return Promise.resolve();
+    }
+    return this.prefs.setFavoritesJson(JSON.stringify(this.favs));
+  }
+
+  // --------------------------------------------------------------------- history
+
+  clearHistory(): void {
+    this.historyEntries = [];
+    this.persistHistory();
+    this.log('历史记录已清空');
+    this.emit();
+  }
+
+  removeHistoryEntry(id: string): void {
+    const kept: HistoryRow[] = [];
+    for (let i = 0; i < this.historyEntries.length; i++) {
+      if (this.historyEntries[i].id !== id) {
+        kept.push(this.historyEntries[i]);
+      }
+    }
+    this.historyEntries = kept;
+    this.persistHistory();
+    this.emit();
+  }
+
+  /** Called when a session ends; newest first and capped, the setting decides whether at all. */
+  private recordHistory(session: ReceiveSession, rows: ReceivedRow[]): void {
+    if (!this.saveToHistoryValue) {
+      return;
+    }
+    for (let i = 0; i < rows.length; i++) {
+      const row: ReceivedRow = rows[i];
+      const entry: HistoryRow = {
+        id: `${session.sessionId}:${row.id}`,
+        name: row.name,
+        size: row.size,
+        fileType: row.fileType,
+        path: row.path,
+        sender: session.senderAlias,
+        timeMs: Date.now(),
+        saved: row.saved
+      };
+      this.historyEntries.unshift(entry);
+    }
+    if (this.historyEntries.length > 200) {
+      this.historyEntries.splice(200, this.historyEntries.length - 200);
+    }
+    this.persistHistory();
+  }
+
+  /** A successful export marks every row and history line that points at that file. */
+  private markSaved(path: string): void {
+    for (let i = 0; i < this.received.length; i++) {
+      if (this.received[i].path === path) {
+        this.received[i].saved = true;
+      }
+    }
+    for (let i = 0; i < this.historyEntries.length; i++) {
+      if (this.historyEntries[i].path === path) {
+        this.historyEntries[i].saved = true;
+      }
+    }
+    this.persistHistory();
+  }
+
+  private readHistory(): HistoryRow[] {
+    const json: string = this.prefs === null ? '' : this.prefs.historyJson();
+    if (json.length === 0) {
+      return [];
+    }
+    try {
+      const parsed: HistoryRow[] = JSON.parse(json) as HistoryRow[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      this.log(`历史记录读取失败: ${describeFailure(e)}`);
+      return [];
+    }
+  }
+
+  private persistHistory(): void {
+    if (this.prefs === null) {
+      return;
+    }
+    this.prefs.setHistoryJson(JSON.stringify(this.historyEntries)).catch((error: Object): void => {
+      this.log(`历史记录写入失败: ${describeFailure(error)}`);
+    });
+  }
+
+  // ----------------------------------------------------------- display settings
+
+  /** The dark palette lives in resources/dark, so following the system is a color-mode switch. */
+  private applyColorMode(): void {
+    const context: common.UIAbilityContext | null = this.abilityContext;
+    if (context === null) {
+      return;
+    }
+    if (this.themeModeValue === 'dark') {
+      context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
+    } else if (this.themeModeValue === 'light') {
+      context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT);
+    } else {
+      context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
+    }
+  }
+
+  async setThemeMode(mode: string): Promise<void> {
+    if (this.prefs === null || this.themeModeValue === mode) {
+      return;
+    }
+    this.themeModeValue = mode;
+    await this.prefs.setThemeMode(mode);
+    this.applyColorMode();
+    this.emit();
+  }
+
+  async setAnimations(enabled: boolean): Promise<void> {
+    if (this.prefs === null || this.animationsValue === enabled) {
+      return;
+    }
+    this.animationsValue = enabled;
+    await this.prefs.setAnimations(enabled);
+    this.emit();
+  }
+
+  async setAutoFinish(enabled: boolean): Promise<void> {
+    if (this.prefs === null || this.autoFinishValue === enabled) {
+      return;
+    }
+    this.autoFinishValue = enabled;
+    await this.prefs.setAutoFinish(enabled);
+    if (enabled) {
+      this.finishedRows = [];
+      this.finishedSender = '';
+    }
+    this.emit();
+  }
+
+  async setSaveToHistory(enabled: boolean): Promise<void> {
+    if (this.prefs === null || this.saveToHistoryValue === enabled) {
+      return;
+    }
+    this.saveToHistoryValue = enabled;
+    await this.prefs.setSaveToHistory(enabled);
+    this.emit();
+  }
+
+  async setAdvanced(enabled: boolean): Promise<void> {
+    if (this.prefs === null || this.advancedValue === enabled) {
+      return;
+    }
+    this.advancedValue = enabled;
+    await this.prefs.setAdvanced(enabled);
+    this.emit();
+  }
+
+  async setWebAutoAccept(enabled: boolean): Promise<void> {
+    if (this.prefs === null || this.webAutoAcceptValue === enabled) {
+      return;
+    }
+    this.webAutoAcceptValue = enabled;
+    await this.prefs.setWebAutoAccept(enabled);
+    this.log(enabled ? '网页分享已设为自动同意请求' : '网页分享恢复为逐个确认');
+    this.emit();
+  }
+
+  /** The finished-transfer card only stays when autoFinish is off; this is its 完成 button. */
+  dismissFinished(): void {
+    this.finishedRows = [];
+    this.finishedSender = '';
+    this.emit();
+  }
+
+  /** The 重启 button: a fresh listener with the current identity and settings. */
+  async restart(): Promise<void> {
+    if (this.prefs === null) {
+      return;
+    }
+    const wasRunning: boolean = this.running;
+    await this.shutdown();
+    if (wasRunning) {
+      await this.startReceiving();
+      this.log('服务器已重启');
+    }
+    this.emit();
+  }
+
+  /** Every local IPv4 address; the receive page derives the official '#<last octet>' from them. */
+  localIps(): string[] {
+    const discovery: Discovery | null = this.discovery;
+    if (discovery === null) {
+      return [];
+    }
+    const interfaces: LocalInterface[] = discovery.localInterfaces();
+    const ips: string[] = [];
+    for (let i = 0; i < interfaces.length; i++) {
+      const address: string = interfaces[i].address;
+      if (address.indexOf(':') >= 0 || address.length === 0) {
+        continue;
+      }
+      if (ips.indexOf(address) < 0) {
+        ips.push(address);
+      }
+    }
+    return ips;
+  }
+
+  /** Drops every staged pick — nothing stopped the sender between 清空 and 开始发送 anyway. */
+  removePicked(uri: string): void {
+    const kept: PickedItem[] = [];
+    for (let i = 0; i < this.picked.length; i++) {
+      if (this.picked[i].uri !== uri) {
+        kept.push(this.picked[i]);
+      }
+    }
+    this.picked = kept;
+    this.emit();
+  }
+
+  /**
+   * Stages typed or pasted text as a file the send engine can read, so clipboard and text sends
+   * take the same path through the Sender as picks from the system dialogs.
+   */
+  stageText(text: string, name: string): void {
+    const context: common.UIAbilityContext | null = this.abilityContext;
+    if (context === null) {
+      return;
+    }
+    const path: string = `${context.cacheDir}/${name}`;
+    try {
+      const file: fs.File = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+      try {
+        fs.writeSync(file.fd, text);
+      } finally {
+        fs.closeSync(file);
+      }
+      this.addPicked([path]);
+      this.log(`已加入文本文件：${name}`);
+    } catch (error) {
+      this.log(`文本暂存失败: ${describeFailure(error)}`);
+      this.emit();
+    }
+  }
+
   // ------------------------------------------------------------ background running
 
   /**
@@ -443,20 +876,34 @@ export class LocalSendService {
    * of which `fileIo.open` accepts unchanged.
    *
    * Picks accumulate because the phone's document picker returns one file per invocation: a folder
-   * transfer is built by tapping 选择文档 several times, so a second pick must not discard the first.
+   * transfer is built by tapping 文件 several times, so a second pick must not discard the first.
    */
   addPicked(uris: string[]): void {
     for (let i = 0; i < uris.length; i++) {
       const uri: string = uris[i];
-      if (this.pickedUris.indexOf(uri) < 0) {
-        this.pickedUris.push(uri);
+      if (this.hasPicked(uri)) {
+        continue;
       }
+      const item: PickedItem = new PickedItem();
+      item.uri = uri;
+      item.name = displayNameOf(uri);
+      item.size = sizeOf(uri);
+      this.picked.push(item);
     }
     this.emit();
   }
 
+  private hasPicked(uri: string): boolean {
+    for (let i = 0; i < this.picked.length; i++) {
+      if (this.picked[i].uri === uri) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   clearPicked(): void {
-    this.pickedUris = [];
+    this.picked = [];
     this.emit();
   }
 
@@ -470,7 +917,7 @@ export class LocalSendService {
       this.reportError('该设备已不在列表中，请重新发现');
       return;
     }
-    if (this.pickedUris.length === 0) {
+    if (this.picked.length === 0) {
       this.reportError('还没有选择文件');
       return;
     }
@@ -480,8 +927,8 @@ export class LocalSendService {
       return;
     }
     const sources: SendSource[] = [];
-    for (let i = 0; i < this.pickedUris.length; i++) {
-      sources.push({ uri: this.pickedUris[i], fileName: displayNameOf(this.pickedUris[i]) });
+    for (let i = 0; i < this.picked.length; i++) {
+      sources.push({ uri: this.picked[i].uri, fileName: this.picked[i].name });
     }
     const target: SendTarget = {
       host: peer.host,
@@ -537,10 +984,13 @@ export class LocalSendService {
 
   private pickedRows(): FileRow[] {
     const rows: FileRow[] = [];
-    for (let i = 0; i < this.pickedUris.length; i++) {
+    for (let i = 0; i < this.picked.length; i++) {
+      const item: PickedItem = this.picked[i];
       const row: FileRow = new FileRow();
-      row.id = `p${i}`;
-      row.name = displayNameOf(this.pickedUris[i]);
+      // The uri is the id so the page can hand a row straight back to removePicked.
+      row.id = item.uri;
+      row.name = item.name;
+      row.size = item.size;
       row.status = 'queued';
       rows.push(row);
     }
@@ -582,7 +1032,7 @@ export class LocalSendService {
    * receiving on first rather than making the user flip two switches in a row.
    */
   async startWebShare(): Promise<void> {
-    if (this.pickedUris.length === 0) {
+    if (this.picked.length === 0) {
       this.reportError('还没有选择文件');
       return;
     }
@@ -595,8 +1045,8 @@ export class LocalSendService {
       return;
     }
     const sources: SendSource[] = [];
-    for (let i = 0; i < this.pickedUris.length; i++) {
-      sources.push({ uri: this.pickedUris[i], fileName: displayNameOf(this.pickedUris[i]) });
+    for (let i = 0; i < this.picked.length; i++) {
+      sources.push({ uri: this.picked[i].uri, fileName: this.picked[i].name });
     }
     const count: number = await web.share(sources);
     if (count === 0) {
@@ -669,6 +1119,10 @@ export class LocalSendService {
   }
 
   private askWebVisitor(context: WebOfferContext): Promise<boolean> {
+    if (this.webAutoAcceptValue) {
+      this.log(`自动同意浏览器 (${context.clientIp}) 的下载请求`);
+      return Promise.resolve(true);
+    }
     this.webOffer = context;
     this.emit();
     return new Promise<boolean>((resolve: (value: boolean) => void) => {
@@ -793,7 +1247,29 @@ export class LocalSendService {
     });
     if (rows.length > 0) {
       this.received = rows;
+      this.recordHistory(session, rows);
     }
+  }
+
+  /** autoFinish off keeps a finished transfer on screen until 完成; everything else clears it. */
+  private collectFinished(session: ReceiveSession, reason: SessionEndReason): void {
+    if (this.autoFinishValue || reason !== SessionEndReason.FINISHED) {
+      this.finishedRows = [];
+      this.finishedSender = '';
+      return;
+    }
+    const rows: FileRow[] = [];
+    session.files.forEach((file: ReceivedFile) => {
+      const row: FileRow = new FileRow();
+      row.id = file.fileId;
+      row.name = file.fileName;
+      row.size = file.size;
+      row.received = file.receivedBytes;
+      row.status = file.status;
+      rows.push(row);
+    });
+    this.finishedRows = rows;
+    this.finishedSender = session.senderAlias;
   }
 
   /**
@@ -802,9 +1278,6 @@ export class LocalSendService {
    * else through the document picker, which asks the user for a destination folder.
    */
   async saveReceived(fileId: string): Promise<void> {
-    if (this.savingId !== '') {
-      return;
-    }
     let row: ReceivedRow | null = null;
     for (let i = 0; i < this.received.length; i++) {
       const candidate: ReceivedRow = this.received[i];
@@ -816,13 +1289,42 @@ export class LocalSendService {
       return;
     }
     const target: ReceivedRow = row;
-    this.savingId = fileId;
+    await this.runSave(fileId, target, (): void => {
+      target.saved = true;
+      this.markSaved(target.path);
+    });
+  }
+
+  /** The same flow for a history line, whose file can outlive the received list on screen. */
+  async saveHistoryEntry(id: string): Promise<void> {
+    let entry: HistoryRow | null = null;
+    for (let i = 0; i < this.historyEntries.length; i++) {
+      const candidate: HistoryRow = this.historyEntries[i];
+      if (candidate.id === id && !candidate.saved) {
+        entry = candidate;
+      }
+    }
+    if (entry === null) {
+      return;
+    }
+    const target: HistoryRow = entry;
+    await this.runSave(id, target, (): void => {
+      target.saved = true;
+      this.markSaved(target.path);
+    });
+  }
+
+  private async runSave(id: string, target: SaveTarget, onSaved: () => void): Promise<void> {
+    if (this.savingId !== '') {
+      return;
+    }
+    this.savingId = id;
     this.emit();
     try {
       if (target.fileType.startsWith('image/') || target.fileType.startsWith('video/')) {
-        await this.saveToGallery(target);
+        await this.saveToGallery(target, onSaved);
       } else {
-        await this.saveToDocuments(target);
+        await this.saveToDocuments(target, onSaved);
       }
     } catch (e) {
       this.log(`保存失败: ${describeFailure(e)}`);
@@ -831,85 +1333,141 @@ export class LocalSendService {
     this.emit();
   }
 
-  private async saveToGallery(row: ReceivedRow): Promise<void> {
+  private async saveToGallery(target: SaveTarget, onSaved: () => void): Promise<void> {
     const context: common.UIAbilityContext | null = this.abilityContext;
     if (context === null) {
       return;
     }
-    const video: boolean = row.fileType.startsWith('video/');
+    const video: boolean = target.fileType.startsWith('video/');
     const helper: photoAccessHelper.PhotoAccessHelper = photoAccessHelper.getPhotoAccessHelper(context);
     const config: photoAccessHelper.PhotoCreationConfig = {
-      title: row.name,
-      fileNameExtension: extensionOf(row.name, video ? 'mp4' : 'jpg'),
+      title: target.name,
+      fileNameExtension: extensionOf(target.name, video ? 'mp4' : 'jpg'),
       photoType: video ? photoAccessHelper.PhotoType.VIDEO : photoAccessHelper.PhotoType.IMAGE
     };
-    const sources: string[] = [fileUri.getUriFromPath(row.path)];
+    const sources: string[] = [fileUri.getUriFromPath(target.path)];
     const work: Promise<string[]> = helper.showAssetsCreationDialog(sources, [config]);
     const created: string[] | null = await withDeadline(work, GALLERY_TIMEOUT_MS);
     if (created === null) {
-      this.log(`存入相册超时: ${row.name}`);
+      this.log(`存入相册超时: ${target.name}`);
       work.then((late: string[]): void => {
-        this.finishGallerySave(row, late);
+        this.finishGallerySave(target, onSaved, late);
       }).catch((error: Object): void => {
         this.log(`保存失败: ${describeFailure(error)}`);
       });
       return;
     }
-    this.finishGallerySave(row, created);
+    this.finishGallerySave(target, onSaved, created);
   }
 
-  private finishGallerySave(row: ReceivedRow, created: string[]): void {
+  private finishGallerySave(target: SaveTarget, onSaved: () => void, created: string[]): void {
     if (created.length === 0) {
-      this.log(`存入相册已取消: ${row.name}`);
+      this.log(`存入相册已取消: ${target.name}`);
       return;
     }
-    row.saved = true;
-    this.log(`已存入相册: ${row.name}`);
+    onSaved();
+    this.log(`已存入相册: ${target.name}`);
     this.emit();
   }
 
-  private async saveToDocuments(row: ReceivedRow): Promise<void> {
+  private async saveToDocuments(target: SaveTarget, onSaved: () => void): Promise<void> {
     const context: common.UIAbilityContext | null = this.abilityContext;
     if (context === null) {
       return;
     }
     const options: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
-    options.newFileNames = [row.name];
+    options.newFileNames = [target.name];
     const instance: picker.DocumentViewPicker = new picker.DocumentViewPicker(context);
     const work: Promise<string[]> = instance.save(options);
     const picked: string[] | null = await withDeadline(work, DOCUMENT_TIMEOUT_MS);
     if (picked === null) {
-      this.log(`保存超时: ${row.name}`);
+      this.log(`保存超时: ${target.name}`);
       // The file manager creates the destination as an empty file and only then answers us, so
       // giving up here would leave 0 bytes behind. Finish the copy whenever it does answer.
       work.then((late: string[]): void => {
-        this.finishDocumentSave(row, late);
+        this.finishDocumentSave(target, onSaved, late);
       }).catch((error: Object): void => {
-        this.log(`保存失败: ${row.name}: ${describeFailure(error)}`);
+        this.log(`保存失败: ${target.name}: ${describeFailure(error)}`);
       });
       return;
     }
-    this.finishDocumentSave(row, picked);
+    this.finishDocumentSave(target, onSaved, picked);
   }
 
-  private finishDocumentSave(row: ReceivedRow, picked: string[]): void {
+  private finishDocumentSave(target: SaveTarget, onSaved: () => void, picked: string[]): void {
     if (picked.length === 0) {
-      this.log(`保存已取消: ${row.name}`);
+      this.log(`保存已取消: ${target.name}`);
       return;
     }
     try {
       const destination: fs.File = fs.openSync(picked[0],
         fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
       try {
-        fs.copyFileSync(row.path, destination.fd);
+        fs.copyFileSync(target.path, destination.fd);
       } finally {
         fs.closeSync(destination);
       }
-      row.saved = true;
-      this.log(`已保存: ${row.name}`);
+      onSaved();
+      this.log(`已保存: ${target.name}`);
       this.emit();
     } catch (error) {
-      this.log(`保存失败: ${row.name}: ${describeFailure(error)}`);
+      this.log(`保存失败: ${target.name}: ${describeFailure(error)}`);
+    }
+  }
+
+  /**
+   * Hands a sandbox file to whatever app registered for that type. There is no guarantee anything
+   * will take it — the emulator ships almost no viewers — so a failure is a log line, not a crash.
+   */
+  openFile(path: string, fileType: string): void {
+    const context: common.UIAbilityContext | null = this.abilityContext;
+    if (context === null) {
+      return;
+    }
+    try {
+      const want: Want = {
+        action: 'ohos.want.action.viewData',
+        uri: fileUri.getUriFromPath(path),
+        type: fileType.length > 0 ? fileType : 'application/octet-stream',
+        // The file lives in our sandbox, so the viewer needs an explicit one-shot read grant.
+        flags: wantConstant.Flags.FLAG_AUTH_READ_URI_PERMISSION
+      };
+      context.startAbility(want).then((): void => {
+        this.log(`已请求打开: ${path}`);
+      }).catch((error: Object): void => {
+        this.log(`没有应用能打开该文件: ${describeFailure(error)}`);
+      });
+    } catch (e) {
+      this.log(`打开失败: ${describeFailure(e)}`);
+    }
+  }
+
+  /** 打开目录: shows the receive folder in the system file manager, like the official app. */
+  openFolder(): void {
+    const path: string = `${this.filesDir}${RECEIVE_SUBDIR}`;
+    this.openFile(path, '');
+  }
+
+  /** 在文件管理器中显示: opens the folder that holds the file. */
+  openFolderOf(path: string): void {
+    const slash: number = path.lastIndexOf('/');
+    this.openFile(slash <= 0 ? path : path.substring(0, slash), '');
+  }
+
+  /** For 关于/捐赠/隐私政策: openLink routes https to the browser without an explicit want. */
+  openExternalUrl(url: string): void {
+    const context: common.UIAbilityContext | null = this.abilityContext;
+    if (context === null) {
+      return;
+    }
+    try {
+      context.openLink(url).then((): void => {
+        this.log(`已在浏览器打开: ${url}`);
+      }).catch((error: Object): void => {
+        this.log(`链接打开失败: ${describeFailure(error)}`);
+      });
+    } catch (e) {
+      this.log(`链接打开失败: ${describeFailure(e)}`);
     }
   }
 
@@ -953,6 +1511,7 @@ export class LocalSendService {
         this.log(`session ${session.sessionId} ended: ${reason}`);
         this.session = null;
         this.collectReceived(session);
+        this.collectFinished(session, reason);
         this.emit();
       },
       onFileUpdated: (session: ReceiveSession, file: ReceivedFile): void => {
@@ -977,6 +1536,16 @@ export class LocalSendService {
   }
 
   private askUser(context: PrepareContext): Promise<PrepareDecision> {
+    if (this.quickSaveMode === 'on'
+      || (this.quickSaveMode === 'paired' && this.isFavorite(context.senderFingerprint))) {
+      const ids: string[] = [];
+      for (let i = 0; i < context.candidates.length; i++) {
+        ids.push(context.candidates[i].fileId);
+      }
+      this.log(`自动保存：接受来自 ${context.info.alias} 的 ${ids.length} 个文件`);
+      const decision: PrepareDecision = { declined: false, acceptedFileIds: ids };
+      return Promise.resolve(decision);
+    }
     this.offer = context;
     this.emit();
     return new Promise<PrepareDecision>((resolve: (value: PrepareDecision) => void) => {
@@ -1051,6 +1620,8 @@ export class LocalSendService {
       row.scheme = peers[i].protocol;
       row.download = peers[i].download;
       row.fingerprint = peers[i].fingerprint;
+      row.model = peers[i].deviceModel;
+      row.deviceType = peers[i].deviceType;
       rows.push(row);
     }
     return rows;
@@ -1110,8 +1681,37 @@ export class LocalSendService {
     snapshot.webOfferAgent = webOffer === null ? '' : webOffer.userAgent;
     snapshot.webOfferFiles = webOffer === null ? 0 : webOffer.fileCount;
     snapshot.webOfferBytes = webOffer === null ? 0 : webOffer.totalBytes;
+    snapshot.quickSave = this.quickSaveMode;
+    snapshot.favorites = this.favorites();
+    snapshot.history = this.historyEntries.slice(0);
+    snapshot.themeMode = this.themeModeValue;
+    snapshot.animations = this.animationsValue;
+    snapshot.autoFinish = this.autoFinishValue;
+    snapshot.saveToHistory = this.saveToHistoryValue;
+    snapshot.advanced = this.advancedValue;
+    snapshot.webAutoAccept = this.webAutoAcceptValue;
+    snapshot.localIps = this.localIps();
+    snapshot.hasFinished = this.finishedRows.length > 0;
+    snapshot.finishedSender = this.finishedSender;
+    snapshot.finishedFiles = this.finishedRows.slice(0);
     snapshot.log = this.logLines.slice(0);
     listener(snapshot);
+  }
+}
+
+/** A favorite is keyed by fingerprint when it has one, by `host:port` when typed in by hand. */
+function favoriteKey(favorite: FavoriteRow): string {
+  return favorite.fingerprint.length > 0
+    ? favorite.fingerprint
+    : `${favorite.host}:${favorite.port}`;
+}
+
+/** Best-effort size for the picked-file card; a uri we cannot stat shows as 0 B, not a crash. */
+function sizeOf(uri: string): number {
+  try {
+    return fs.statSync(uri).size;
+  } catch (e) {
+    return 0;
   }
 }
 
@@ -1122,8 +1722,7 @@ export class LocalSendService {
  * `decodeURIComponent` failure only means the name contains a stray `%`, which is legal in a file
  * name, so the raw tail is the better answer.
  */
-function displayNameOf(uri: string): string {
-  const trimmed: string = uri.endsWith('/') ? uri.substring(0, uri.length - 1) : uri;
+function displayNameOf(uri: string): string {  const trimmed: string = uri.endsWith('/') ? uri.substring(0, uri.length - 1) : uri;
   const slash: number = trimmed.lastIndexOf('/');
   const tail: string = slash < 0 ? trimmed : trimmed.substring(slash + 1);
   try {
