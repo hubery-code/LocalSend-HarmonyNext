@@ -2,23 +2,23 @@
   "color": [
     {
       "name": "start_window_background",
-      "value": "#FFFFFF"
+      "value": "#F5FBF9"
     },
     {
       "name": "bg",
-      "value": "#FFFFFF"
+      "value": "#F5FBF9"
     },
     {
       "name": "card",
-      "value": "#F1F4F3"
+      "value": "#EFF5F3"
     },
     {
       "name": "nav_bar",
-      "value": "#EEF2F1"
+      "value": "#ECEEED"
     },
     {
       "name": "primary",
-      "value": "#006A6A"
+      "value": "#006A60"
     },
     {
       "name": "on_primary",
@@ -26,31 +26,31 @@
     },
     {
       "name": "primary_soft",
-      "value": "#CCE8E7"
+      "value": "#CCE8E4"
     },
     {
       "name": "on_soft",
-      "value": "#0B2020"
+      "value": "#00201E"
     },
     {
       "name": "input_fill",
-      "value": "#E6EFEE"
+      "value": "#D6EAE8"
     },
     {
       "name": "text",
-      "value": "#1A1C1C"
+      "value": "#191C1B"
     },
     {
       "name": "text_dim",
-      "value": "#667070"
+      "value": "#6F7977"
     },
     {
       "name": "text_faint",
-      "value": "#99A3A2"
+      "value": "#889492"
     },
     {
       "name": "outline",
-      "value": "#BFC9C8"
+      "value": "#BFC9C6"
     },
     {
       "name": "warning_text",

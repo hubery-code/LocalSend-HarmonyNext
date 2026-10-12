@@ -189,27 +189,16 @@ struct RadarLogo {
   }
 
   build() {
-    Stack() {
-      Circle()
-        .width(228)
-        .height(228)
-        .fill(Color.Transparent)
-        .stroke($r('app.color.outline'))
-        .strokeWidth(1)
-      Circle()
-        .width(164)
-        .height(164)
-        .fill(Color.Transparent)
-        .stroke($r('app.color.outline'))
-        .strokeWidth(1)
+    Column() {
       Image($r('app.media.locallsend_logo'))
-        .width(112)
-        .height(112)
+        .width(180)
+        .height(180)
         .rotate({ angle: this.angle })
         .opacity(this.spinning ? 1 : 0.45)
     }
-    .width(240)
-    .height(240)
+    .width(200)
+    .height(200)
+    .justifyContent(FlexAlign.Center)
   }
 }
 
@@ -310,20 +299,30 @@ struct Index {
       this.navItem('设置', $r('app.media.ic_settings'), 2)
     }
     .width('100%')
-    .height(64)
+    .height(78)
+    .padding({ top: 6, bottom: 12 })
     .backgroundColor($r('app.color.nav_bar'))
-    .border({ width: { top: 1 }, color: $r('app.color.outline') })
+    .border({ width: { top: 0.5 }, color: $r('app.color.outline') })
   }
 
   @Builder navItem(label: string, icon: Resource, index: number) {
-    Column({ space: 3 }) {
-      Image(icon)
-        .width(24)
-        .height(24)
-        .fillColor(this.tab === index ? $r('app.color.primary') : $r('app.color.text_dim'))
+    Column({ space: 4 }) {
+      Row() {
+        Image(icon)
+          .width(22)
+          .height(22)
+          .fillColor(this.tab === index ? $r('app.color.on_soft') : $r('app.color.text_dim'))
+      }
+      .width(64)
+      .height(32)
+      .justifyContent(FlexAlign.Center)
+      .borderRadius(16)
+      .backgroundColor(this.tab === index ? $r('app.color.primary_soft') : Color.Transparent)
+
       Text(label)
         .fontSize(12)
-        .fontColor(this.tab === index ? $r('app.color.primary') : $r('app.color.text_dim'))
+        .fontWeight(this.tab === index ? FontWeight.Bold : FontWeight.Normal)
+        .fontColor(this.tab === index ? $r('app.color.text') : $r('app.color.text_dim'))
     }
     .layoutWeight(1)
     .height('100%')
@@ -365,17 +364,17 @@ struct Index {
   @Builder receivePage() {
     Scroll() {
       Column() {
-        Row() {
+        Row({ space: 6 }) {
+          Blank()
           this.iconButton($r('app.media.ic_history'), $r('app.color.text_dim'), (): void => {
             this.sheet = 'history';
           })
-          Blank()
           this.iconButton($r('app.media.ic_info'), $r('app.color.text_dim'), (): void => {
             this.sheet = 'info';
           })
         }
         .width('100%')
-        .padding({ left: 8, right: 8, top: 8 })
+        .padding({ left: 16, right: 16, top: 12 })
 
         Column() {
           RadarLogo({
@@ -383,57 +382,61 @@ struct Index {
           })
         }
         .width('100%')
-        .height(236)
+        .height(210)
         .justifyContent(FlexAlign.Center)
 
         Text(this.snap.alias)
-          .fontSize(40)
-          .maxFontSize(40)
-          .minFontSize(16)
+          .fontSize(34)
+          .fontWeight(FontWeight.Bold)
           .maxLines(1)
-          .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
           .textAlign(TextAlign.Center)
-          .padding({ left: 16, right: 16 })
+          .padding({ left: 24, right: 24 })
           .fontColor($r('app.color.text'))
 
         Text(this.visualText())
-          .fontSize(20)
+          .fontSize(22)
           .fontColor($r('app.color.text_dim'))
-          .margin({ top: 4 })
+          .margin({ top: 6 })
+
+        Text('自动保存')
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_dim'))
+          .textAlign(TextAlign.Center)
+          .margin({ top: 36, bottom: 8 })
 
         Row() {
-          Text('自动保存')
-            .fontSize(16)
-            .fontColor($r('app.color.text'))
-            .layoutWeight(1)
           this.quickSaveSegment()
         }
         .width('100%')
-        .padding({ left: 16, right: 16, top: 16 })
+        .justifyContent(FlexAlign.Center)
 
         Text(this.quickSaveHint())
           .fontSize(11)
           .fontColor($r('app.color.warning_text'))
           .width('100%')
-          .padding({ left: 16, right: 16, top: 4 })
+          .textAlign(TextAlign.Center)
+          .padding({ left: 16, right: 16, top: 6 })
           .visibility(this.quickSaveHint().length > 0 ? Visibility.Visible : Visibility.None)
 
-        Row({ space: 8 }) {
+        Row({ space: 6 }) {
           Image($r('app.media.ic_link'))
-            .width(20)
-            .height(20)
-            .fillColor($r('app.color.on_soft'))
+            .width(18)
+            .height(18)
+            .fillColor($r('app.color.primary'))
           Text('通过链接接收')
-            .fontSize(16)
-            .fontColor($r('app.color.on_soft'))
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.primary'))
         }
-        .height(48)
-        .width('100%')
-        .justifyContent(FlexAlign.Center)
-        .borderRadius(24)
-        .backgroundColor($r('app.color.primary_soft'))
-        .margin({ left: 16, right: 16, top: 14 })
+        .height(38)
+        .padding({ left: 18, right: 18 })
+        .borderRadius(19)
+        .border({ width: 1, color: $r('app.color.primary') })
+        .backgroundColor(Color.Transparent)
+        .margin({ top: 20 })
         .onClick((): void => {
           this.openWebUpload();
         })
@@ -442,7 +445,7 @@ struct Index {
           Text('接收已停止，可在「设置 - 网络」中开启服务器')
             .fontSize(12)
             .fontColor($r('app.color.text_faint'))
-            .margin({ top: 10 })
+            .margin({ top: 12 })
         }
 
         this.sessionCard()
@@ -457,20 +460,33 @@ struct Index {
   }
 
   @Builder quickSaveSegment() {
-    Row({ space: 2 }) {
-      this.quickSaveCell('关', 'off')
-      this.quickSaveCell('收藏夹', 'paired')
-      this.quickSaveCell('开', 'on')
+    Row() {
+      this.quickSaveCell('关', 'off', true, false)
+      Divider().vertical(true).height(20).color($r('app.color.outline'))
+      this.quickSaveCell('收藏夹', 'paired', false, false)
+      Divider().vertical(true).height(20).color($r('app.color.outline'))
+      this.quickSaveCell('开', 'on', false, true)
     }
+    .height(38)
+    .borderRadius(19)
+    .border({ width: 1, color: $r('app.color.outline') })
+    .backgroundColor(Color.Transparent)
   }
 
-  @Builder quickSaveCell(label: string, mode: string) {
+  @Builder quickSaveCell(label: string, mode: string, isFirst: boolean, isLast: boolean) {
     Text(label)
-      .fontSize(13)
-      .fontColor(this.snap.quickSave === mode ? $r('app.color.on_primary') : $r('app.color.text_dim'))
-      .backgroundColor(this.snap.quickSave === mode ? $r('app.color.primary') : $r('app.color.input_fill'))
-      .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-      .borderRadius(16)
+      .fontSize(14)
+      .fontWeight(this.snap.quickSave === mode ? FontWeight.Medium : FontWeight.Normal)
+      .fontColor(this.snap.quickSave === mode ? $r('app.color.on_soft') : $r('app.color.text'))
+      .backgroundColor(this.snap.quickSave === mode ? $r('app.color.primary_soft') : Color.Transparent)
+      .height('100%')
+      .padding({ left: 18, right: 18 })
+      .borderRadius({
+        topLeft: isFirst ? 19 : 0,
+        bottomLeft: isFirst ? 19 : 0,
+        topRight: isLast ? 19 : 0,
+        bottomRight: isLast ? 19 : 0
+      })
       .onClick((): void => {
         this.run(service.setQuickSave(mode));
       })
@@ -740,20 +756,22 @@ struct Index {
   }
 
   @Builder bigButton(label: string, icon: Resource, action: () => void) {
-    Column({ space: 8 }) {
+    Column({ space: 6 }) {
       Image(icon)
         .width(26)
         .height(26)
-        .fillColor($r('app.color.on_soft'))
+        .fillColor($r('app.color.primary'))
       Text(label)
         .fontSize(13)
-        .fontColor($r('app.color.on_soft'))
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text'))
     }
     .layoutWeight(1)
-    .height(80)
+    .height(68)
     .justifyContent(FlexAlign.Center)
-    .borderRadius(16)
-    .backgroundColor($r('app.color.primary_soft'))
+    .borderRadius(12)
+    .backgroundColor($r('app.color.card'))
+    .border({ width: 0.5, color: $r('app.color.outline') })
     .onClick(action)
   }
 
@@ -887,38 +905,40 @@ struct Index {
   }
 
   @Builder devicePlaceholder() {
-    Row({ space: 12 }) {
+    Row({ space: 16 }) {
       Column() {
-        Image($r('app.media.ic_computer'))
-          .width(24)
-          .height(24)
-          .fillColor($r('app.color.outline'))
+        Image($r('app.media.ic_phone'))
+          .width(26)
+          .height(26)
+          .fillColor($r('app.color.text_dim'))
       }
       .width(44)
       .height(44)
       .justifyContent(FlexAlign.Center)
       .borderRadius(22)
-      .backgroundColor($r('app.color.card'))
+      .backgroundColor($r('app.color.input_fill'))
 
-      Column({ space: 6 }) {
+      Column({ space: 8 }) {
         Row()
-          .width(120)
-          .height(12)
-          .borderRadius(6)
+          .width(110)
+          .height(14)
+          .borderRadius(7)
           .backgroundColor($r('app.color.outline'))
         Row()
-          .width(80)
-          .height(10)
-          .borderRadius(5)
+          .width(70)
+          .height(12)
+          .borderRadius(6)
           .backgroundColor($r('app.color.outline'))
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
     }
     .width('100%')
-    .padding(12)
-    .opacity(0.3)
-    .margin({ left: 16, right: 16, bottom: 10 })
+    .padding(16)
+    .borderRadius(16)
+    .backgroundColor($r('app.color.card'))
+    .opacity(0.35)
+    .margin({ left: 16, right: 16, bottom: 12 })
   }
 
   @Builder sendProgressCard() {
@@ -1026,8 +1046,22 @@ struct Index {
   @Builder settingsPage() {
     Scroll() {
       Column() {
-        this.sectionHeader('通用')
+        Text('设置')
+          .fontSize(22)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.text'))
+          .width('100%')
+          .textAlign(TextAlign.Center)
+          .padding({ top: 16, bottom: 8 })
+
+        // 通用
         Column() {
+          Text('通用')
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.text'))
+            .width('100%')
+            .margin({ bottom: 8 })
           this.settingsValueRow('主题', 'theme', (): void => {
             this.sheet = 'theme';
           })
@@ -1036,19 +1070,26 @@ struct Index {
           })
         }
         .width('100%')
-        .border({ width: { top: 0.5 }, color: $r('app.color.outline') })
+        .padding(16)
+        .borderRadius(16)
+        .backgroundColor($r('app.color.card'))
+        .margin({ left: 16, right: 16, top: 10, bottom: 4 })
 
-        this.sectionHeader('接收')
+        // 接收
         Column() {
+          Text('接收')
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.text'))
+            .width('100%')
+            .margin({ bottom: 8 })
           this.settingsValueRow('自动保存', 'quickSave', (): void => {
             this.sheet = 'quickSave';
           })
-          // Buttons, not a Toggle: a Toggle fires its `onChange` when the first snapshot flips the
-          // bound value, which would pop the PIN dialog at every launch.
           Row({ space: 4 }) {
             Column({ space: 2 }) {
               Text('需要一个 PIN')
-                .fontSize(16)
+                .fontSize(15)
                 .fontColor($r('app.color.text'))
               Text(this.snap.receivePin.length > 0
                 ? `当前 PIN：${this.snap.receivePin}` : '未设置')
@@ -1062,7 +1103,8 @@ struct Index {
             if (this.snap.receivePin.length > 0) {
               Button('清除')
                 .fontSize(13)
-                .height(32)
+                .height(30)
+                .borderRadius(8)
                 .backgroundColor($r('app.color.input_fill'))
                 .fontColor($r('app.color.text'))
                 .onClick((): void => {
@@ -1071,7 +1113,8 @@ struct Index {
             }
             Button(this.snap.receivePin.length > 0 ? '修改' : '设置')
               .fontSize(13)
-              .height(32)
+              .height(30)
+              .borderRadius(8)
               .backgroundColor($r('app.color.primary'))
               .fontColor($r('app.color.on_primary'))
               .onClick((): void => {
@@ -1080,7 +1123,7 @@ struct Index {
               })
           }
           .width('100%')
-          .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+          .padding({ top: 6, bottom: 6 })
 
           this.settingsToggle('自动完成传输任务', 'autoFinish', (value: boolean): void => {
             this.run(service.setAutoFinish(value));
@@ -1088,29 +1131,48 @@ struct Index {
           this.settingsToggle('保存到历史记录', 'saveToHistory', (value: boolean): void => {
             this.run(service.setSaveToHistory(value));
           })
-          this.settingsRow('保存目录', '应用目录/LocalSend', (): void => {
+          this.settingsActionRow('保存目录', '应用目录/LocalSend', (): void => {
             service.openFolder();
           })
         }
         .width('100%')
-        .border({ width: { top: 0.5 }, color: $r('app.color.outline') })
+        .padding(16)
+        .borderRadius(16)
+        .backgroundColor($r('app.color.card'))
+        .margin({ left: 16, right: 16, top: 10, bottom: 4 })
 
-        this.sectionHeader('发送')
+        // 发送
         Column() {
+          Text('发送')
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.text'))
+            .width('100%')
+            .margin({ bottom: 8 })
           this.settingsToggle('通过链接分享：自动同意请求', 'webAutoAccept',
             (value: boolean): void => {
               this.run(service.setWebAutoAccept(value));
             })
         }
         .width('100%')
-        .border({ width: { top: 0.5 }, color: $r('app.color.outline') })
+        .padding(16)
+        .borderRadius(16)
+        .backgroundColor($r('app.color.card'))
+        .margin({ left: 16, right: 16, top: 10, bottom: 4 })
 
-        this.sectionHeader('网络')
+        // 网络
         Column() {
+          Text('网络')
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.text'))
+            .width('100%')
+            .margin({ bottom: 8 })
+
           Row({ space: 4 }) {
             Column({ space: 2 }) {
               Text('服务器')
-                .fontSize(16)
+                .fontSize(15)
                 .fontColor($r('app.color.text'))
               Text(this.snap.running ? '在线' : '不在线')
                 .fontSize(12)
@@ -1119,26 +1181,28 @@ struct Index {
             .layoutWeight(1)
             .alignItems(HorizontalAlign.Start)
 
-            if (this.snap.running) {
-              this.iconButton($r('app.media.ic_refresh'), $r('app.color.text_dim'), (): void => {
-                this.run(service.restart());
-              })
-              this.iconButton($r('app.media.ic_stop'), $r('app.color.text_dim'), (): void => {
-                this.run(service.setReceiving(false));
-              })
-            } else {
-              this.iconButton($r('app.media.ic_play'), $r('app.color.primary'), (): void => {
-                this.run(service.setReceiving(true));
-              })
+            Row({ space: 6 }) {
+              if (this.snap.running) {
+                this.iconButton($r('app.media.ic_refresh'), $r('app.color.text_dim'), (): void => {
+                  this.run(service.restart());
+                })
+                this.iconButton($r('app.media.ic_stop'), $r('app.color.text_dim'), (): void => {
+                  this.run(service.setReceiving(false));
+                })
+              } else {
+                this.iconButton($r('app.media.ic_play'), $r('app.color.primary'), (): void => {
+                  this.run(service.setReceiving(true));
+                })
+              }
             }
           }
           .width('100%')
-          .padding({ left: 16, right: 10, top: 10, bottom: 10 })
+          .padding({ top: 6, bottom: 6 })
 
-          Column({ space: 8 }) {
+          Column({ space: 6 }) {
             Row() {
               Text('设备名称')
-                .fontSize(16)
+                .fontSize(15)
                 .fontColor($r('app.color.text'))
                 .layoutWeight(1)
               this.iconButton($r('app.media.ic_dice'), $r('app.color.text_dim'), (): void => {
@@ -1152,12 +1216,14 @@ struct Index {
                 .layoutWeight(1)
                 .fontSize(14)
                 .backgroundColor($r('app.color.input_fill'))
+                .borderRadius(8)
                 .onChange((value: string): void => {
                   this.aliasDraft = value;
                 })
               Button('应用')
                 .fontSize(13)
                 .height(36)
+                .borderRadius(8)
                 .backgroundColor($r('app.color.primary'))
                 .fontColor($r('app.color.on_primary'))
                 .onClick((): void => {
@@ -1167,10 +1233,10 @@ struct Index {
             .width('100%')
           }
           .width('100%')
-          .padding({ left: 16, right: 16, top: 6, bottom: 12 })
+          .padding({ top: 6, bottom: 6 })
           .alignItems(HorizontalAlign.Start)
 
-          this.settingsToggle('加密', 'encryption', (value: boolean): void => {
+          this.settingsToggle('加密传输 (HTTPS/TLS)', 'encryption', (value: boolean): void => {
             this.run(service.setEncryption(value));
           })
           if (this.snap.encryption) {
@@ -1178,45 +1244,54 @@ struct Index {
               .fontSize(11)
               .fontColor($r('app.color.warning_text'))
               .width('100%')
-              .padding({ left: 16, right: 16, bottom: 10 })
+              .padding({ top: 4, bottom: 6 })
           }
         }
         .width('100%')
-        .border({ width: { top: 0.5 }, color: $r('app.color.outline') })
+        .padding(16)
+        .borderRadius(16)
+        .backgroundColor($r('app.color.card'))
+        .margin({ left: 16, right: 16, top: 10, bottom: 4 })
 
-        this.sectionHeader('其他')
+        // 其他
         Column() {
-          this.settingsRow('关于', 'v0.1.0', (): void => {
+          Text('其他')
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.text'))
+            .width('100%')
+            .margin({ bottom: 8 })
+          this.settingsActionRow('关于 LocalSend', '打开', (): void => {
             this.sheet = 'about';
           })
-          this.settingsRow('捐赠', '', (): void => {
+          this.settingsActionRow('支持 LocalSend', '捐赠', (): void => {
             service.openExternalUrl('https://localsend.org/donate');
           })
-          this.settingsRow('隐私政策', '', (): void => {
+          this.settingsActionRow('隐私政策', '打开', (): void => {
             service.openExternalUrl('https://localsend.org/privacy');
           })
         }
         .width('100%')
-        .border({ width: { top: 0.5 }, color: $r('app.color.outline') })
+        .padding(16)
+        .borderRadius(16)
+        .backgroundColor($r('app.color.card'))
+        .margin({ left: 16, right: 16, top: 10, bottom: 4 })
 
-        this.sectionHeader('高级设置')
-        Column() {
-          Row() {
-            Text('高级设置')
-              .fontSize(16)
-              .fontColor($r('app.color.text'))
-              .layoutWeight(1)
-            Checkbox()
-              .select(this.snap.advanced)
-              .selectedColor($r('app.color.primary'))
-              .onChange((value: boolean): void => {
-                this.run(service.setAdvanced(value));
-              })
-          }
-          .width('100%')
-          .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+        // 高级设置复选框
+        Row({ space: 8 }) {
+          Text('高级设置')
+            .fontSize(15)
+            .fontColor($r('app.color.text'))
+          Checkbox()
+            .select(this.snap.advanced)
+            .selectedColor($r('app.color.primary'))
+            .onChange((value: boolean): void => {
+              this.run(service.setAdvanced(value));
+            })
         }
         .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .padding({ top: 16, bottom: 12 })
 
         if (this.snap.advanced) {
           Column() {
@@ -1229,6 +1304,7 @@ struct Index {
                 .fontSize(12)
                 .fontColor($r('app.color.text_dim'))
                 .width('100%')
+                .margin({ top: 6, bottom: 4 })
               ForEach(this.snap.hosts, (host: string) => {
                 Text(host)
                   .fontSize(13)
@@ -1236,13 +1312,15 @@ struct Index {
                   .width('100%')
               }, (host: string) => host)
             }
-            this.settingsRow('日志', '', (): void => {
+            this.settingsActionRow('日志', '查看', (): void => {
               this.sheet = 'log';
             })
           }
           .width('100%')
-          .padding({ top: 4 })
-          .border({ width: { top: 0.5 }, color: $r('app.color.outline') })
+          .padding(16)
+          .borderRadius(16)
+          .backgroundColor($r('app.color.card'))
+          .margin({ left: 16, right: 16, bottom: 12 })
         }
 
         Column({ space: 6 }) {
@@ -1258,7 +1336,7 @@ struct Index {
             .textAlign(TextAlign.Center)
         }
         .width('100%')
-        .padding({ top: 30, bottom: 30 })
+        .padding({ top: 24, bottom: 32 })
       }
       .width('100%')
     }
@@ -1267,35 +1345,33 @@ struct Index {
     .scrollBar(BarState.Off)
   }
 
-  @Builder sectionHeader(title: string) {
-    Text(title)
-      .fontSize(14)
-      .fontWeight(FontWeight.Medium)
-      .fontColor($r('app.color.primary'))
-      .width('100%')
-      .padding({ left: 16, right: 16, top: 18, bottom: 4 })
+  @Builder settingsActionRow(label: string, buttonText: string, action: () => void) {
+    Row() {
+      Text(label)
+        .fontSize(15)
+        .fontColor($r('app.color.text'))
+        .layoutWeight(1)
+      Row({ space: 4 }) {
+        Text(buttonText)
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text'))
+        Image($r('app.media.ic_chevron_right'))
+          .width(16)
+          .height(16)
+          .fillColor($r('app.color.text_dim'))
+      }
+      .padding({ left: 12, right: 10, top: 6, bottom: 6 })
+      .borderRadius(8)
+      .backgroundColor($r('app.color.input_fill'))
+      .onClick(action)
+    }
+    .width('100%')
+    .padding({ top: 6, bottom: 6 })
   }
 
   @Builder settingsRow(label: string, value: string, action: () => void) {
-    Row({ space: 8 }) {
-      Text(label)
-        .fontSize(16)
-        .fontColor($r('app.color.text'))
-        .layoutWeight(1)
-      Text(value)
-        .fontSize(14)
-        .fontColor($r('app.color.text_dim'))
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .constraintSize({ maxWidth: 170 })
-      Image($r('app.media.ic_chevron_right'))
-        .width(20)
-        .height(20)
-        .fillColor($r('app.color.text_faint'))
-    }
-    .width('100%')
-    .padding({ left: 16, right: 12, top: 14, bottom: 14 })
-    .onClick(action)
+    this.settingsActionRow(label, value, action);
   }
 
   /**
@@ -1305,15 +1381,16 @@ struct Index {
   @Builder settingsToggle(label: string, kind: string, action: (value: boolean) => void) {
     Row() {
       Text(label)
-        .fontSize(16)
+        .fontSize(15)
         .fontColor($r('app.color.text'))
         .layoutWeight(1)
       Toggle({ type: ToggleType.Switch, isOn: this.toggleValue(kind) })
         .selectedColor($r('app.color.primary'))
+        .switchPointColor(Color.White)
         .onChange(action)
     }
     .width('100%')
-    .padding({ left: 16, right: 12, top: 6, bottom: 6 })
+    .padding({ top: 6, bottom: 6 })
   }
 
   private toggleValue(kind: string): boolean {
@@ -1334,25 +1411,7 @@ struct Index {
 
   /** Same by-value freeze as settingsToggle: the value is looked up in the body, not passed in. */
   @Builder settingsValueRow(label: string, kind: string, action: () => void) {
-    Row({ space: 8 }) {
-      Text(label)
-        .fontSize(16)
-        .fontColor($r('app.color.text'))
-        .layoutWeight(1)
-      Text(this.rowValue(kind))
-        .fontSize(14)
-        .fontColor($r('app.color.text_dim'))
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .constraintSize({ maxWidth: 170 })
-      Image($r('app.media.ic_chevron_right'))
-        .width(20)
-        .height(20)
-        .fillColor($r('app.color.text_faint'))
-    }
-    .width('100%')
-    .padding({ left: 16, right: 12, top: 14, bottom: 14 })
-    .onClick(action)
+    this.settingsActionRow(label, this.rowValue(kind), action);
   }
 
   private rowValue(kind: string): string {
