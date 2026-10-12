@@ -537,6 +537,8 @@ struct Index {
           Button('完成')
             .fontSize(13)
             .height(32)
+            .backgroundColor($r('app.color.input_fill'))
+            .fontColor($r('app.color.text'))
             .onClick((): void => {
               service.dismissFinished();
             })
@@ -599,6 +601,8 @@ struct Index {
             Button(file.saved ? '已保存' : '保存')
               .fontSize(12)
               .height(30)
+              .backgroundColor($r('app.color.primary'))
+              .fontColor($r('app.color.on_primary'))
               .enabled(!file.saved && this.snap.savingId === '')
               .onClick((): void => {
                 service.saveReceived(file.id);
@@ -1469,6 +1473,8 @@ struct Index {
           Blank()
           Button('关闭')
             .fontSize(13)
+            .backgroundColor($r('app.color.input_fill'))
+            .fontColor($r('app.color.text'))
             .onClick((): void => {
               this.sheet = 'none';
             })
@@ -1718,6 +1724,8 @@ struct Index {
           Button('关闭')
             .fontSize(13)
             .height(36)
+            .backgroundColor($r('app.color.input_fill'))
+            .fontColor($r('app.color.text'))
             .onClick((): void => {
               this.sheet = 'none';
             })
@@ -1916,6 +1924,8 @@ struct Index {
           Button('完成')
             .fontSize(13)
             .height(36)
+            .backgroundColor($r('app.color.input_fill'))
+            .fontColor($r('app.color.text'))
             .onClick((): void => {
               this.sheet = 'none';
             })
@@ -2253,6 +2263,8 @@ struct Index {
                   Button('保存')
                     .fontSize(12)
                     .height(28)
+                    .backgroundColor($r('app.color.primary'))
+                    .fontColor($r('app.color.on_primary'))
                     .enabled(this.snap.savingId === '')
                     .onClick((): void => {
                       this.run(service.saveHistoryEntry(entry.id));
@@ -2656,6 +2668,8 @@ struct Index {
             Button('关闭')
               .fontSize(13)
               .height(38)
+              .backgroundColor($r('app.color.input_fill'))
+              .fontColor($r('app.color.text'))
               .onClick((): void => {
                 this.sheet = 'none';
               })

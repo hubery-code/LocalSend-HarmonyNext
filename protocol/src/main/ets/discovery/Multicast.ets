@@ -54,6 +54,11 @@ export class MulticastChannel {
     this.log = log;
   }
 
+  /** Without a joined listener the group traffic never arrives, however the senders fare. */
+  hasReceiver(): boolean {
+    return this.receiver !== null || this.receiverV6 !== null;
+  }
+
   static async open(interfaces: LocalInterface[], port: number, group: string | null,
     sink: AnnouncementSink, log: DiscoveryLogger): Promise<MulticastChannel> {
     const resolvedGroup: string = group === null ? DEFAULT_MULTICAST_GROUP : group;

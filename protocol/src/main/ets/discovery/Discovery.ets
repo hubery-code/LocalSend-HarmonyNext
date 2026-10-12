@@ -295,7 +295,7 @@ export class Discovery {
   }
 
   hasMulticast(): boolean {
-    return this.channel !== null;
+    return this.channel !== null && this.channel.hasReceiver();
   }
 
   localInterfaces(): LocalInterface[] {
